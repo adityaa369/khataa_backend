@@ -43,7 +43,16 @@ const LoanSchema = new mongoose.Schema({
     },
     startDate: Date,
     endDate: Date,
+    nextDueDate: Date,
     activatedAt: Date,
+    emiAmount: {
+        type: Number,
+        default: 0
+    },
+    totalPayable: {
+        type: Number,
+        default: 0
+    },
     loanType: {
         type: String,
         default: 'personal' // e.g., 'home', 'business', 'personal'

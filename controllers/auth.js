@@ -73,7 +73,7 @@ exports.sendOtp = async (req, res) => {
     const result = await sendOtp(phone, otp);
 
     if (result.success) {
-        res.status(200).json({ success: true, message: 'OTP sent successfully', dev_otp: otp });
+        res.status(200).json({ success: true, message: 'OTP sent successfully' });
     } else {
         res.status(500).json({ success: false, message: 'Failed to send OTP' });
     }

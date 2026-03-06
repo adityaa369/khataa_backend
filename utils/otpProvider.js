@@ -9,21 +9,25 @@ const sendOtp = async (phone, otp) => {
         const templateId = process.env.MSG91_TEMPLATE_ID;
         const authkey = process.env.MSG91_AUTH_KEY;
 
-        // Use POST with JSON body
-        // removing 'sender' to let MSG91 use the one linked to the template ID (DLT)
-        const response = await axios.post(`https://api.msg91.com/api/v5/otp`, {
-            template_id: templateId,
-            mobile: `91${cleanPhone}`,
-            authkey: authkey,
-            otp: otp
-        }, {
-            headers: {
-                'Content-Type': 'application/json'
+        // control.msg91.com is the recommended endpoint for v5 APIs.
+        // It's safest to pass authkey in headers, and the rest as POST JSON data or query params.
+        const response = await axios.post(
+            'https://control.msg91.com/api/v5/otp',
+            {
+                template_id: templateId,
+                mobile: `91${cleanPhone}`,
+                otp: otp
+            },
+            {
+                headers: {
+                    'authkey': authkey,
+                    'Content-Type': 'application/json'
+                }
             }
-        });
+        );
 
         console.log('[MSG91] Send Response:', JSON.stringify(response.data));
-        return { success: response.data.type === 'success', response: response.data };
+        return { success: response.data.type === 'success' || response.data.type === 'success ', response: response.data };
     } catch (error) {
         const errorData = error.response ? JSON.stringify(error.response.data) : error.message;
         console.error('[MSG91] Send OTP Error:', errorData);
@@ -42,14 +46,16 @@ const verifyOtp = async (phone, otp) => {
         };
         console.log(`[MSG91] Attempting to verify OTP ${otp} for ${finalMobile} with payload:`, payload);
 
-        const response = await axios.get(`https://api.msg91.com/api/v5/otp/verify`, {
+        const response = await axios.get(`https://control.msg91.com/api/v5/otp/verify`, {
             params: {
                 mobile: finalMobile,
-                otp: otp,
-                authkey: process.env.MSG91_AUTH_KEY
+                otp: otp
+            },
+            headers: {
+                'authkey': process.env.MSG91_AUTH_KEY
             }
         });
-        if (response.data.type === 'success') {
+        if (response.data.type === 'success' || response.data.type === 'success ') {
             return { success: true, response: response.data };
         }
         return { success: false, message: response.data.message };
