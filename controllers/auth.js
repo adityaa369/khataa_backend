@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const CreditScore = require('../models/CreditScore');
-const { sendOtp, verifyOtp, verifyAccessToken } = require('../utils/otpProvider');
+const { verifyFirebaseToken } = require('../utils/otpProvider');
 
 // @desc    Verify MSG91 Access Token
 // @route   POST /api/auth/verify-token
@@ -59,44 +59,30 @@ exports.verifyToken = async (req, res) => {
     });
 };
 
-// @desc    Send OTP to phone (Direct)
-// @route   POST /api/auth/send-otp
-// @access  Public
-exports.sendOtp = async (req, res) => {
-    const { phone } = req.body;
-
-    if (!phone) {
-        return res.status(400).json({ success: false, message: 'Please provide a phone number' });
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const result = await sendOtp(phone, otp);
-
-    if (result.success) {
-        res.status(200).json({ success: true, message: 'OTP sent successfully', dev_otp: otp });
-    } else {
-        res.status(500).json({ success: false, message: 'Failed to send OTP' });
-    }
-};
-
-// @desc    Verify OTP and return token (Legacy/Direct)
+// @desc    Verify Firebase ID Token and login/register
 // @route   POST /api/auth/verify-otp
 // @access  Public
 exports.verifyOtp = async (req, res) => {
-    const { phone, otp } = req.body;
+    // The Flutter app will send the Firebase ID token in the 'otp' field or a dedicated 'idToken' field.
+    // To minimize Flutter changes while migrating, we'll check both.
+    const idToken = req.body.idToken || req.body.otp;
 
-    if (!phone || !otp) {
-        return res.status(400).json({ success: false, message: 'Please provide phone and OTP' });
+    if (!idToken) {
+        return res.status(400).json({ success: false, message: 'Please provide Firebase ID Token' });
     }
 
-    const result = await verifyOtp(phone, otp);
+    const result = await verifyFirebaseToken(idToken);
 
     if (!result.success) {
-        return res.status(400).json({ success: false, message: 'Invalid OTP' });
+        return res.status(400).json({ success: false, message: result.message });
     }
 
-    // Check if user exists
-    let user = await User.findOne({ phone });
+    // Firebase returns phone number with +91. We strip any non-digits and leading +91/91 for consistency.
+    let phoneStr = result.mobile.replace(/\D/g, '');
+    if (phoneStr.startsWith('91') && phoneStr.length > 10) {
+        phoneStr = phoneStr.replace(/^91/, '');
+    }
+
     let isNewUser = false;
 
     if (!user) {

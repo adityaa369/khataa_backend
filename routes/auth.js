@@ -1,13 +1,17 @@
 const express = require('express');
-const { sendOtp, verifyOtp, verifyToken, register, getMe } = require('../controllers/auth');
-const { protect } = require('../middleware/auth');
-
 const router = express.Router();
+const authController = require('../controllers/auth');
 
-router.post('/send-otp', sendOtp);
-router.post('/verify-otp', verifyOtp);
-router.post('/verify-token', verifyToken);
-router.post('/register', protect, register);
-router.get('/me', protect, getMe);
+// Note: /send-otp is no longer needed since Firebase SDK sends it from the client
+// We keep it returning success to not break existing app flows immediately 
+// until Flutter is updated.
+router.post('/send-otp', (req, res) => {
+    res.status(200).json({ success: true, message: 'OTP flow shifted to Firebase client SDK.' });
+});
+
+router.post('/verify-otp', authController.verifyOtp);
+router.post('/verify-token', authController.verifyToken); // Keep for legacy if needed
+router.post('/register', require('../middleware/auth'), authController.register);
+router.get('/me', require('../middleware/auth'), authController.getMe);
 
 module.exports = router;
