@@ -11,7 +11,7 @@ router.post('/send-otp', (req, res) => {
 
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/verify-token', authController.verifyToken); // Keep for legacy if needed
-router.post('/register', require('../middleware/auth'), authController.register);
-router.get('/me', require('../middleware/auth'), authController.getMe);
+router.post('/register', require('../middleware/auth').protect, authController.register);
+router.get('/me', require('../middleware/auth').protect, authController.getMe);
 
 module.exports = router;

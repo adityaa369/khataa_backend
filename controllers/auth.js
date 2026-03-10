@@ -83,13 +83,14 @@ exports.verifyOtp = async (req, res) => {
         phoneStr = phoneStr.replace(/^91/, '');
     }
 
+    let user = await User.findOne({ phone: phoneStr });
     let isNewUser = false;
 
     if (!user) {
         const id = `user_${Date.now()}`;
         user = await User.create({
             id,
-            phone,
+            phone: phoneStr,
             isVerified: true
         });
         isNewUser = true;
