@@ -1,6 +1,8 @@
 const ChitFund = require('../models/ChitFund');
 const ChitSubscription = require('../models/ChitSubscription');
 const ChitAuction = require('../models/ChitAuction');
+const ChitInvite = require('../models/ChitInvite');
+const User = require('../models/User');
 
 // @desc    Create a new Chit Fund (Dynamic config by Owner)
 // @route   POST /api/chits/create
@@ -230,6 +232,137 @@ exports.payInstallment = async (req, res) => {
         await sub.save();
 
         res.status(200).json({ success: true, message: 'Installment paid successfully', receipt: transactionId });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Send an invite to a user via Phone Number
+// @route   POST /api/chits/:id/invite
+// @access  Private (Owner Only)
+exports.sendInvite = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const { receiverPhone } = req.body;
+
+        if (!receiverPhone) {
+            return res.status(400).json({ success: false, message: 'Please provide a receiver phone number' });
+        }
+
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit not found' });
+
+        if (chit.owner.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only the group owner can send invites' });
+        }
+
+        if (chit.status !== 'registration') {
+            return res.status(400).json({ success: false, message: 'Cannot invite to an active or completed chit' });
+        }
+
+        // Check if user exists in our system
+        const receiver = await User.findOne({ phone: receiverPhone });
+
+        const invite = await ChitInvite.create({
+            chitFund: chitId,
+            sender: req.user.id,
+            receiverPhone,
+            receiverId: receiver ? receiver._id : null
+        });
+
+        res.status(201).json({ success: true, message: 'Invite sent successfully', invite });
+    } catch (err) {
+        if (err.code === 11000) {
+            return res.status(400).json({ success: false, message: 'An invite to this phone number already exists for this chit' });
+        }
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Get user's pending invites
+// @route   GET /api/chits/invites
+// @access  Private
+exports.getMyInvites = async (req, res) => {
+    try {
+        const invites = await ChitInvite.find({ 
+            $or: [
+                { receiverId: req.user.id },
+                { receiverPhone: req.user.phone } // Match by phone if ID wasn't linked initially
+            ],
+            status: 'pending'
+        }).populate('chitFund')
+          .populate('sender', 'firstName lastName phone');
+
+        res.status(200).json({ success: true, count: invites.length, data: invites });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Respond to an invite (accept/decline)
+// @route   POST /api/chits/invites/:id/respond
+// @access  Private
+exports.respondToInvite = async (req, res) => {
+    try {
+        const { status } = req.body; // 'accepted' or 'declined'
+        const inviteId = req.params.id;
+
+        if (!['accepted', 'declined'].includes(status)) {
+            return res.status(400).json({ success: false, message: 'Invalid response status' });
+        }
+
+        const invite = await ChitInvite.findById(inviteId);
+        if (!invite) return res.status(404).json({ success: false, message: 'Invite not found' });
+
+        // Link ID if it wasn't already (e.g. they registered after invite was sent)
+        if (!invite.receiverId) {
+            invite.receiverId = req.user.id;
+        }
+
+        // Verify it belongs to them
+        if (invite.receiverId.toString() !== req.user.id && invite.receiverPhone !== req.user.phone) {
+            return res.status(403).json({ success: false, message: 'Not authorized to respond to this invite' });
+        }
+
+        if (invite.status !== 'pending') {
+            return res.status(400).json({ success: false, message: `Invite has already been ${invite.status}` });
+        }
+
+        invite.status = status;
+        await invite.save();
+
+        if (status === 'accepted') {
+            const chit = await ChitFund.findById(invite.chitFund);
+            
+            if (chit.currentSubscribersCount >= chit.totalMonths) {
+                 return res.status(400).json({ success: false, message: 'This chit group is already fully subscribed' });
+            }
+
+            // Create subscription
+            const sub = await ChitSubscription.create({
+                user: req.user.id,
+                chitFund: chit._id
+            });
+
+            // Increment count & auto-start check
+            chit.currentSubscribersCount += 1;
+            if (chit.currentSubscribersCount === chit.totalMonths) {
+                chit.status = 'active';
+                chit.startDate = new Date();
+                
+                // Clear any remaining pending invites for this fully-subscribed chit
+                await ChitInvite.updateMany(
+                    { chitFund: chit._id, status: 'pending' },
+                    { $set: { status: 'declined' } }
+                );
+            }
+            await chit.save();
+
+            return res.status(200).json({ success: true, message: 'Invite accepted. You joined the chit fund.', subscription: sub });
+        }
+
+        res.status(200).json({ success: true, message: 'Invite declined' });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }

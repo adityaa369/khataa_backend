@@ -6,7 +6,10 @@ const {
     getMyChits,
     getPendingAuctions,
     authorizeBid,
-    payInstallment
+    payInstallment,
+    sendInvite,
+    getMyInvites,
+    respondToInvite
 } = require('../controllers/chitFunds');
 
 const { protect } = require('../middleware/auth');
@@ -20,6 +23,11 @@ router.route('/create').post(createChitFund);
 router.route('/vacant').get(getVacantChits);
 router.route('/:id/join').post(joinChit);
 router.route('/:id/installments').post(payInstallment);
+router.route('/:id/invite').post(sendInvite);
+
+router.route('/invites').get(getMyInvites);
+router.route('/invites/:id/respond').post(respondToInvite);
+
 router.route('/my').get(getMyChits);
 router.route('/auctions/pending').get(getPendingAuctions);
 router.route('/auctions/:id/authorize').post(authorizeBid);
