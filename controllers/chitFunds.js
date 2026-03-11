@@ -43,7 +43,7 @@ exports.createChitFund = async (req, res) => {
 // @access  Private
 exports.getVacantChits = async (req, res) => {
     try {
-        const chits = await ChitFund.find({ status: 'registration' });
+        const chits = await ChitFund.find({ status: 'registration', owner: req.user.id });
         res.status(200).json({ success: true, chits });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
