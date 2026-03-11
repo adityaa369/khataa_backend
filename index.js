@@ -30,12 +30,14 @@ const authRoutes = require('./routes/auth');
 const loanRoutes = require('./routes/loans');
 const creditScoreRoutes = require('./routes/creditScore');
 const userRoutes = require('./routes/users');
+const chitFundRoutes = require('./routes/chitFunds');
 
 // Mount Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/loans', loanRoutes);
 app.use('/api/credit-score', creditScoreRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/chits', chitFundRoutes);
 
 // Test Route
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
