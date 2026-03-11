@@ -124,7 +124,7 @@ exports.getTakenLoans = async (req, res) => {
         // Populate lender details manually to avoid changing the Mongoose schema
         const loansWithLender = [];
         for (const loan of loans) {
-            const lenderUser = await User.findById(loan.lender);
+            const lenderUser = await User.findOne({ id: loan.lender });
             const loanObj = loan.toObject();
             if (lenderUser) {
                 loanObj.lenderName = `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() || 'Unknown Lender';
