@@ -1,4 +1,5 @@
 const admin = require('../config/firebase');
+const axios = require('axios');
 
 /**
  * Verify Firebase ID Token
@@ -32,4 +33,46 @@ const verifyFirebaseToken = async (idToken) => {
     }
 };
 
-module.exports = { verifyFirebaseToken };
+/**
+ * Send custom OTP (Loan Consent) via MSG91
+ * Firebase cannot send arbitrary SMS to other phones from the backend.
+ * This function uses MSG91 specifically for borrower consent verification.
+ */
+const sendOtp = async (phone, otp) => {
+    try {
+        const authKey = process.env.MSG91_AUTH_KEY;
+        const templateId = process.env.MSG91_TEMPLATE_ID;
+
+        if (!authKey || !templateId) {
+             console.error('[MSG91] Missing credentials in environment variables.');
+             return { success: false, message: 'Server missing SMS configuration' };
+        }
+
+        let mobile = phone.toString();
+        // Ensure format is 91xxxxxxxxxx for MSG91
+        if (mobile.startsWith('+')) {
+            mobile = mobile.substring(1);
+        } else if (!mobile.startsWith('91') && mobile.length === 10) {
+            mobile = `91${mobile}`;
+        }
+
+        const url = `https://control.msg91.com/api/v5/otp?template_id=${templateId}&mobile=${mobile}&authkey=${authKey}`;
+        
+        console.log(`[MSG91] Requesting SMS to ${mobile} via MSG91...`);
+        const response = await axios.post(url, { otp: otp }, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.data && response.data.type === 'success') {
+             return { success: true, message: 'OTP sent successfully' };
+        } else {
+             console.error('[MSG91] API Response Error:', response.data);
+             return { success: false, message: response.data.message || 'Failed to send SMS' };
+        }
+    } catch (error) {
+        console.error('[MSG91] Network Error:', error.message);
+        return { success: false, message: error.message };
+    }
+};
+
+module.exports = { verifyFirebaseToken, sendOtp };
