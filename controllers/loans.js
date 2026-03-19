@@ -45,8 +45,22 @@ exports.createLoan = async (req, res) => {
             });
         }
 
-        // Generate OTP for loan agreement (sent to borrower)
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        // Prevent Duplicate Loans via accidental multiple clicks (Issue Fix)
+        const twoMinsAgo = new Date(Date.now() - 2 * 60 * 1000);
+        const duplicateLoan = await Loan.findOne({
+            lender: req.user.id,
+            borrowerPhone: borrowerPhone,
+            amount: amount,
+            createdAt: { $gte: twoMinsAgo }
+        });
+
+        if (duplicateLoan) {
+            console.warn(`[Loans] Duplicate loan creation attempt intercepted for ${borrowerPhone}`);
+            return res.status(429).json({
+                success: false,
+                message: 'Duplicate loan request detected. Please wait a moment.'
+            });
+        }
 
         const loan = await Loan.create({
             lender: req.user.id,
@@ -59,30 +73,14 @@ exports.createLoan = async (req, res) => {
             interestRate,
             durationMonths,
             loanType,
-            otp,
-            status: 'pending_otp'
+            status: 'pending_approval'
         });
 
-        // Send OTP to borrower
-        console.log(`[Loans] Sending Agreement OTP ${otp} to borrower ${borrowerPhone}...`);
-        const sendResult = await sendOtp(borrowerPhone, otp);
-
         const loanResponse = loan.toObject();
-        delete loanResponse.otp;
-
-        if (!sendResult.success) {
-            console.error('[Loans] MSG91 Sending Failed!', sendResult.error || sendResult.message);
-            // Delete the loan to prevent orphan unverified loans from failing SMS
-            await Loan.findByIdAndDelete(loan._id);
-            return res.status(500).json({
-                success: false,
-                message: `Failed to send SMS to borrower. MSG91 Error: ${sendResult.error || sendResult.message || 'Unknown configuration error'}`
-            });
-        }
 
         res.status(201).json({
             success: true,
-            message: 'Loan agreement created. OTP sent to borrower.',
+            message: 'Loan agreement sent to borrower for approval.',
             loan: loanResponse
         });
     } catch (err) {
@@ -140,18 +138,16 @@ exports.getTakenLoans = async (req, res) => {
     }
 };
 
-// @desc    Verify loan agreement via OTP
+// @desc    Verify/Approve loan agreement (Borrower Self-Verification)
 // @route   POST /api/loans/:id/verify
 // @access  Private (Borrower)
 exports.verifyLoan = async (req, res) => {
     try {
-        const { otp } = req.body;
-        console.log('\n--- LOAN VERIFICATION DEBUG ---');
+        console.log('\n--- LOAN APPROVAL DEBUG ---');
         console.log('Loan ID received:', req.params.id);
-        console.log('OTP received:', otp);
 
         const currentUserPhone = req.user.phone.toString().replace(/^\+?91/, '');
-        console.log('User attempting verify:', currentUserPhone);
+        console.log('User attempting approval:', currentUserPhone);
 
         const loan = await Loan.findById(req.params.id);
 
@@ -160,36 +156,13 @@ exports.verifyLoan = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Loan not found' });
         }
 
-        // Check if current user is involved in the loan
-        const isLender = loan.lender.toString() === req.user.id.toString();
         const isBorrower = loan.borrowerPhone === currentUserPhone;
 
-        // ALLOW Lender to verify (Lender-driven flow) OR Borrower (Self-verify flow)
-        if (!isLender && !isBorrower) {
-            console.error(`[Loans] SECURITY ALERT: User ${req.user.id} is neither Lender nor Borrower.`);
-            return res.status(403).json({ success: false, message: 'Not authorized to verify this loan.' });
-        }
-
-        console.log(`[Loans] Verification allowed for User ${req.user.id} (Is Lender: ${isLender}, Is Borrower: ${isBorrower})`);
-
-        // If the current user is the borrower, ensure their phone matches the loan's borrowerPhone
-        // This check is crucial for borrower-initiated verification to prevent one borrower from verifying another's loan.
-        // For lender-initiated verification, this check is bypassed as the lender is not the borrower.
-        if (isBorrower && loan.borrowerPhone !== currentUserPhone) {
-            console.error(`[Loans] PHONE MISMATCH: Loan intended for ${loan.borrowerPhone}, but ${currentUserPhone} is trying to verify.`);
-            return res.status(403).json({ success: false, message: 'This loan was not issued to this phone number.' });
-        }
-
-        console.log(`[DEBUG] DB Stored OTP: "${loan.otp}"`);
-        console.log(`[DEBUG] Received OTP: "${otp}"`);
-
-        if (loan.otp?.toString().trim() !== otp?.toString().trim()) {
-            console.error(`[DEBUG] OTP MISMATCH for loan ${loan._id}`);
-            return res.status(400).json({ success: false, message: 'Invalid OTP' });
+        if (!isBorrower) {
+            return res.status(403).json({ success: false, message: 'Only the designated borrower can approve this loan.' });
         }
 
         loan.status = 'active';
-        loan.isOtpVerified = true;
         loan.startDate = Date.now();
         loan.activatedAt = Date.now();
         loan.borrower = req.user.id; // Link the borrower's actual user ID
