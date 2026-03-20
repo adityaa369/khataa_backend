@@ -24,6 +24,11 @@ const LoanSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    transaction_id: {
+        type: String,
+        unique: true,
+        sparse: true
+    },
     interestRate: {
         type: Number,
         default: 0

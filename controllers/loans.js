@@ -1,7 +1,8 @@
 const Loan = require('../models/Loan');
 const User = require('../models/User');
-const CreditScore = require('../models/CreditScore');
 const { sendOtp } = require('../utils/otpProvider');
+const { sendPushNotification } = require('../utils/fcm');
+const { updateCreditScore } = require('../utils/creditScoreCalc');
 
 // @desc    Create a new loan
 // @route   POST /api/loans
@@ -16,7 +17,8 @@ exports.createLoan = async (req, res) => {
             amount,
             interest_rate,
             duration_months,
-            type
+            type,
+            transaction_id
         } = req.body;
 
         // Sanitize phone: strip 91 or +91
@@ -33,6 +35,18 @@ exports.createLoan = async (req, res) => {
                 success: false,
                 message: 'You cannot give a loan to yourself'
             });
+        }
+
+        if (transaction_id) {
+            const existingLoan = await Loan.findOne({ transaction_id, lender: req.user.id });
+            if (existingLoan) {
+                console.warn(`[Loans] Idempotency intercepted for transaction ${transaction_id}`);
+                return res.status(200).json({
+                    success: true,
+                    message: 'Loan already created',
+                    loan: existingLoan.toObject()
+                });
+            }
         }
 
         // Check if borrower exists in system (STRICT CHECK)
@@ -73,7 +87,8 @@ exports.createLoan = async (req, res) => {
             interestRate,
             durationMonths,
             loanType,
-            status: 'pending_approval'
+            status: 'pending_approval',
+            transaction_id
         });
 
         const loanResponse = loan.toObject();
@@ -273,71 +288,4 @@ exports.updateProgress = async (req, res) => {
     }
 };
 
-// Helper to update credit score
-async function updateCreditScore(userId) {
-    const loans = await Loan.find({ borrower: userId, status: { $in: ['active', 'completed', 'overdue', 'defaulted'] } });
-
-    if (loans.length === 0) return;
-
-    let scorePoints = 0;
-    let totalLoanAmount = 0;
-    const now = new Date();
-
-    loans.forEach(loan => {
-        const weight = Math.log10(loan.amount + 10); // Higher amount loans have slightly higher impact
-        totalLoanAmount += loan.amount;
-
-        if (loan.status === 'completed') {
-            scorePoints += (100 * weight); // Full points for completion
-
-            // Bonus for completing before end date
-            if (loan.endDate && loan.updatedAt && new Date(loan.updatedAt) < loan.endDate) {
-                scorePoints += (10 * weight);
-            }
-        } else if (loan.status === 'active') {
-            scorePoints += (loan.progress * 50 * weight); // Partial points based on progress
-
-            // Penalize or reward based on real-time due dates
-            if (loan.nextDueDate) {
-                const daysUntilDue = (loan.nextDueDate - now) / (1000 * 60 * 60 * 24);
-
-                if (daysUntilDue < 0) {
-                    // Late payment penalty (max 30 points)
-                    const daysLate = Math.abs(daysUntilDue);
-                    scorePoints -= (Math.min(daysLate, 30) * 1 * weight);
-                } else if (daysUntilDue > 15 && loan.progress > 0) {
-                    // Making progress early gives small bonus
-                    scorePoints += (5 * weight);
-                }
-            }
-        } else if (loan.status === 'overdue') {
-            scorePoints -= (30 * weight); // Penalty for being overdue
-        } else if (loan.status === 'defaulted') {
-            scorePoints -= (100 * weight); // Heavy penalty for default
-        }
-    });
-
-    // Normalize the score based on the total loan amount weight
-    const averageWeight = totalLoanAmount > 0 ? (scorePoints / Math.log10(totalLoanAmount + 10)) : 0;
-
-    // Base score is 400. Max achievable score goes up to 900.
-    const calculatedScore = 400 + Math.floor(averageWeight);
-    const newScore = Math.max(300, Math.min(calculatedScore, 900));
-
-    let status = 'Good';
-    if (newScore < 550) status = 'Poor';
-    else if (newScore < 650) status = 'Fair';
-    else if (newScore < 750) status = 'Good';
-    else status = 'Excellent';
-
-    await CreditScore.findOneAndUpdate(
-        { user: userId },
-        {
-            cibilScore: newScore,
-            experianScore: newScore + 5,
-            status,
-            lastUpdated: Date.now()
-        },
-        { upsert: true }
-    );
-}
+// Credit score logic is extracted to shared utility

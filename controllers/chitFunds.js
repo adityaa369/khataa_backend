@@ -267,8 +267,19 @@ exports.sendInvite = async (req, res) => {
             chitFund: chitId,
             sender: req.user.id,
             receiverPhone,
-            receiverId: receiver ? receiver._id : null
+            receiverId: receiver ? receiver.id : null
         });
+
+        // Fire FCM Notification to Invitee
+        if (receiver && receiver.fcmToken) {
+            const { sendPushNotification } = require('../utils/fcm');
+            await sendPushNotification(
+                receiver.fcmToken,
+                'Chit Group Invitation',
+                `${req.user.firstName || 'Someone'} has invited you to join the ${chit.name} Chit Group.`,
+                { type: 'CHIT_INVITE', chitId: chit._id.toString() }
+            );
+        }
 
         res.status(201).json({ success: true, message: 'Invite sent successfully', invite });
     } catch (err) {
@@ -284,14 +295,18 @@ exports.sendInvite = async (req, res) => {
 // @access  Private
 exports.getMyInvites = async (req, res) => {
     try {
-        const invites = await ChitInvite.find({ 
+        let invites = await ChitInvite.find({ 
             $or: [
                 { receiverId: req.user.id },
                 { receiverPhone: req.user.phone } // Match by phone if ID wasn't linked initially
             ],
             status: 'pending'
-        }).populate('chitFund')
-          .populate('sender', 'firstName lastName phone');
+        }).populate('chitFund').lean();
+
+        for (let inv of invites) {
+            const senderUser = await User.findOne({ id: inv.sender }).select('firstName lastName phone').lean();
+            inv.sender = senderUser;
+        }
 
         res.status(200).json({ success: true, count: invites.length, data: invites });
     } catch (err) {
@@ -357,6 +372,18 @@ exports.respondToInvite = async (req, res) => {
                 );
             }
             await chit.save();
+
+            // Fire FCM Notification to Group Owner
+            const owner = await User.findById(chit.owner);
+            if (owner && owner.fcmToken) {
+                const { sendPushNotification } = require('../utils/fcm');
+                await sendPushNotification(
+                    owner.fcmToken,
+                    'Chit Group Update',
+                    `${req.user.firstName || 'A user'} has joined your Chit Group ${chit.name}.`,
+                    { type: 'CHIT_JOINED', chitId: chit._id.toString() }
+                );
+            }
 
             return res.status(200).json({ success: true, message: 'Invite accepted. You joined the chit fund.', subscription: sub });
         }
