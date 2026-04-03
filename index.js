@@ -43,7 +43,7 @@ app.use('/api/chits', chitFundRoutes);
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 
 // Server Config
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 const MONGO_URI = process.env.MONGODB_URI;
 
 // DB Connection & Start Server

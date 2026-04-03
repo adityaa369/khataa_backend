@@ -1,5 +1,6 @@
 const CreditScore = require('../models/CreditScore');
 const Loan = require('../models/Loan');
+const ChitSubscription = require('../models/ChitSubscription');
 
 async function updateCreditScore(userId) {
     const loans = await Loan.find({ borrower: userId, status: { $in: ['active', 'completed', 'overdue', 'defaulted'] } });
@@ -56,6 +57,32 @@ async function updateCreditScore(userId) {
     loans.forEach(loan => {
         if (loan.durationMonths) monthsOfHistory += loan.durationMonths;
     });
+
+    // 4. Phase 5: Chit Funds Impact Addition
+    const chits = await ChitSubscription.find({ user: userId }).populate('chitFund');
+    let chitPoints = 0;
+    
+    chits.forEach(sub => {
+        const chit = sub.chitFund;
+        if (!chit) return;
+        
+        // Base weight based on subscription value
+        const chitWeight = Math.log10(chit.monthlySubscription + 10);
+        
+        // Reward for timely payments
+        chitPoints += (sub.installmentsPaid * 5 * chitWeight);
+        monthsOfHistory += sub.installmentsPaid;
+
+        if (sub.status === 'completed') {
+            chitPoints += (50 * chitWeight); // Completion bonus
+        } else if (sub.status === 'defaulted') {
+            chitPoints -= (120 * chitWeight); // Severe penalty for defaulting on group commit
+        }
+    });
+
+    // Merge Chit points into global score points
+    scorePoints += chitPoints;
+
     const historyScore = Math.min(monthsOfHistory * 5, 150); // max 150 points
 
     const averageWeight = totalLoanAmount > 0 ? (scorePoints / Math.log10(totalLoanAmount + 10)) : 0;

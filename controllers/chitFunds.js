@@ -4,6 +4,74 @@ const ChitAuction = require('../models/ChitAuction');
 const ChitInvite = require('../models/ChitInvite');
 const User = require('../models/User');
 
+// @desc    Get members of a specific Chit Fund
+// @route   GET /api/chits/:id/members
+// @access  Private
+exports.getChitMembers = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        
+        // 1. Verify Chit Exists
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) {
+            return res.status(404).json({ success: false, message: 'Chit not found' });
+        }
+
+        // 2. Fetch active members (Subscribers)
+        let subscriptions = await ChitSubscription.find({ chitFund: chitId }).lean();
+        
+        // Populate actual user data from User model
+        let members = [];
+        for (let sub of subscriptions) {
+            const userDoc = await User.findOne({ id: sub.user }).select('firstName lastName phone profilePic').lean();
+            if (userDoc) {
+                members.push({
+                    user: userDoc,
+                    installmentsPaid: sub.installmentsPaid,
+                    hasWonAuction: sub.hasWonAuction,
+                    wonMonth: sub.wonMonth,
+                    totalDividendEarned: sub.totalDividendEarned,
+                    status: sub.status,
+                    joinedAt: sub.createdAt
+                });
+            }
+        }
+
+        // 3. Fetch pending invites (useful for Organizer view Tracker)
+        let pendingInvites = [];
+        if (chit.owner.toString() === req.user.id) {
+            let invites = await ChitInvite.find({ chitFund: chitId, status: 'pending' }).lean();
+            for (let inv of invites) {
+               let inviteeInfo = null;
+               if (inv.receiverId) {
+                   inviteeInfo = await User.findOne({ id: inv.receiverId }).select('firstName lastName phone profilePic').lean();
+               }
+               pendingInvites.push({
+                   phone: inv.receiverPhone,
+                   user: inviteeInfo,
+                   status: inv.status,
+                   sentAt: inv.createdAt
+               });
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            chitDetails: {
+              name: chit.name,
+              totalMonths: chit.totalMonths,
+              currentSubscribersCount: chit.currentSubscribersCount,
+              status: chit.status,
+              isOwner: chit.owner.toString() === req.user.id
+            },
+            members, 
+            pendingInvites 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 // @desc    Create a new Chit Fund (Dynamic config by Owner)
 // @route   POST /api/chits/create
 // @access  Private
@@ -105,11 +173,27 @@ exports.getMyChits = async (req, res) => {
             .populate('chitFund');
         
         // Format for frontend
-        const result = subs.map(sub => {
+        const result = await Promise.all(subs.map(async (sub) => {
             const chit = sub.chitFund;
-            // Mock calculation for UI purposes - real logic would calculate based on ChitAuction dividends
-            const dueAmount = chit.monthlySubscription * 0.9; // Example: 10% dividend discount
             
+            // Phase 2: Dynamic Dues Engine
+            const initialMonthlyDue = (chit.totalValue / chit.totalMonths) * (1 + (chit.organizerFeePercent / 100)); // Base + Commission
+            let dueAmount = initialMonthlyDue;
+            
+            // Calculate dividend from previous month (if applicable)
+            if (chit.completedMonths > 0) {
+                const ChitAuction = require('../models/ChitAuction');
+                const lastAuction = await ChitAuction.findOne({ chitFund: chit._id, monthNumber: chit.completedMonths });
+                if (lastAuction && lastAuction.dividendPerMember) {
+                    dueAmount -= lastAuction.dividendPerMember; // Subtract the reward from their monthly due!
+                }
+            }
+
+            // Zero out dues if they've paid for the current active month or are completed
+            if (sub.installmentsPaid > chit.completedMonths || chit.status === 'completed') {
+                dueAmount = 0;
+            }
+
             return {
                 id: sub._id,
                 chitId: chit._id,
@@ -118,10 +202,11 @@ exports.getMyChits = async (req, res) => {
                 totalValue: chit.totalValue,
                 totalMonths: chit.totalMonths,
                 completedMonths: chit.completedMonths,
-                dueAmount: dueAmount,
+                installmentsPaid: sub.installmentsPaid,
+                dueAmount: Math.max(0, dueAmount), // Ensure it doesn't go below 0
                 status: sub.status
             };
-        });
+        }));
 
         res.status(200).json({ success: true, myChits: result });
     } catch (err) {
@@ -193,7 +278,81 @@ exports.authorizeBid = async (req, res) => {
         }
 
         // In a real app, this bid would be pushed to an array of active bids for the current month's auction cycle.
-        res.status(200).json({ success: true, message: 'Bid authorized and submitted successfully' });
+        // For MVP, we directly record the auction if valid. In reality, multiple people bid and cron job picks the highest.
+        // As a quick safe simplification for Phase 3:
+        const ChitAuction = require('../models/ChitAuction');
+        
+        let auction = await ChitAuction.findOne({ chitFund: chitId, monthNumber: chit.completedMonths + 1 });
+        if (!auction) {
+            // First person to bid sets the baseline
+            auction = await ChitAuction.create({
+                chitFund: chitId,
+                monthNumber: chit.completedMonths + 1,
+                auctionDate: new Date(),
+                winnerUserId: req.user.id,
+                winningBidDiscount: bidDiscount,
+                dividendPerMember: 0,
+                prizeMoneyPaid: 0
+            });
+        } else {
+            // If this new bid is higher, they steal the winning spot!
+            if (bidDiscount > auction.winningBidDiscount) {
+                auction.winnerUserId = req.user.id;
+                auction.winningBidDiscount = bidDiscount;
+                await auction.save();
+            }
+        }
+
+        res.status(200).json({ success: true, message: 'Bid authorized and submitted successfully', currentHighestBid: auction.winningBidDiscount });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Finalize Auction for the current month
+// @route   POST /api/chits/:id/finalize-auction
+// @access  Private (Organizer Only)
+exports.finalizeAuction = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const chit = await ChitFund.findById(chitId);
+
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit not found' });
+        if (chit.owner.toString() !== req.user.id) return res.status(403).json({ success: false, message: 'Only standard owner can finalize' });
+
+        const ChitAuction = require('../models/ChitAuction');
+        const targetMonth = chit.completedMonths + 1;
+
+        const auction = await ChitAuction.findOne({ chitFund: chitId, monthNumber: targetMonth });
+        if (!auction) return res.status(400).json({ success: false, message: 'No bids exist for this month yet' });
+
+        // Phase 3 Dividend Math
+        const organizerCommission = chit.totalValue * (chit.organizerFeePercent / 100);
+        const dividendPool = auction.winningBidDiscount - organizerCommission;
+        
+        // Members get the dividend
+        auction.dividendPerMember = dividendPool > 0 ? (dividendPool / chit.totalMonths) : 0;
+        
+        // Winner gets the pot
+        auction.prizeMoneyPaid = chit.totalValue - auction.winningBidDiscount - organizerCommission;
+        await auction.save();
+
+        // Mark the individual subscriber as having won!
+        const winnerSub = await ChitSubscription.findOne({ user: auction.winnerUserId, chitFund: chitId });
+        if (winnerSub) {
+            winnerSub.hasWonAuction = true;
+            winnerSub.wonMonth = targetMonth;
+            await winnerSub.save();
+        }
+
+        // Advance the chit!
+        chit.completedMonths += 1;
+        if (chit.completedMonths >= chit.totalMonths) {
+            chit.status = 'completed';
+        }
+        await chit.save();
+
+        res.status(200).json({ success: true, message: 'Auction finalized successfully', auction });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -213,7 +372,8 @@ exports.payInstallment = async (req, res) => {
         const sub = await ChitSubscription.findOne({ user: req.user.id, chitFund: req.params.id });
         if (!sub) return res.status(404).json({ success: false, message: 'Subscription not found' });
 
-        // Record the transaction
+        // Instead of actively storing everything loosely in arrays, we ideally push to a ChitTransaction model.
+        // For now, retaining backward compatibility with the array until model is established:
         sub.transactions.push({
             monthNumber,
             amountPaid,
@@ -221,17 +381,55 @@ exports.payInstallment = async (req, res) => {
             date: new Date()
         });
 
-        sub.installmentsPaid += 1;
+        // The user has simply submitted their receipt. It goes to pending.
+        const msg = req.user.id === chit.owner.toString() 
+                    ? 'Payment verified automatically for the organizer' 
+                    : 'Installment submitted. Waiting for organizer verification.';
         
-        // Check if user is now up to date
-        const chit = await ChitFund.findById(req.params.id);
-        if (sub.installmentsPaid >= chit.completedMonths && sub.status === 'defaulted') {
-             sub.status = 'active'; // Restore eligibility
+        // Auto-verify if the caller is the Organizer
+        if (req.user.id === chit.owner.toString()) {
+            sub.installmentsPaid += 1;
+            // Check if user is now up to date
+            if (sub.installmentsPaid >= chit.completedMonths && sub.status === 'defaulted') {
+                 sub.status = 'active'; // Restore eligibility
+            }
         }
 
         await sub.save();
 
-        res.status(200).json({ success: true, message: 'Installment paid successfully', receipt: transactionId });
+        res.status(200).json({ success: true, message: msg, receipt: transactionId });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Verify a member's monthly installment payment
+// @route   POST /api/chits/:id/verify-installment
+// @access  Private (Organizer Only)
+exports.verifyInstallment = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const { subscriberId, transactionId } = req.body;
+
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit not found' });
+
+        if (chit.owner.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only the group owner can verify payments' });
+        }
+
+        const sub = await ChitSubscription.findById(subscriberId);
+        if (!sub) return res.status(404).json({ success: false, message: 'Subscription not found' });
+
+        // Safely bump installments
+        sub.installmentsPaid += 1;
+
+        if (sub.installmentsPaid >= chit.completedMonths && sub.status === 'defaulted') {
+            sub.status = 'active'; 
+        }
+
+        await sub.save();
+        res.status(200).json({ success: true, message: 'Member payment verified successfully' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
