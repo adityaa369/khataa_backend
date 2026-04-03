@@ -176,9 +176,9 @@ exports.getMyChits = async (req, res) => {
         const result = await Promise.all(subs.map(async (sub) => {
             const chit = sub.chitFund;
             
-            // Phase 2: Dynamic Dues Engine
-            const initialMonthlyDue = (chit.totalValue / chit.totalMonths) * (1 + (chit.organizerFeePercent / 100)); // Base + Commission
-            let dueAmount = initialMonthlyDue;
+            // Accurate Mathematics: Base monthly installment is simply Total Value / Total Months
+            let dueAmount = chit.totalValue / chit.totalMonths;
+
             
             // Calculate dividend from previous month (if applicable)
             if (chit.completedMonths > 0) {
@@ -587,6 +587,105 @@ exports.respondToInvite = async (req, res) => {
         }
 
         res.status(200).json({ success: true, message: 'Invite declined' });
+
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Get Owner Admin Dashboard Data (Members Matrix & Auction Timeline)
+// @route   GET /api/chits/:id/admin-dashboard
+// @access  Private (Owner Only)
+exports.getAdminDashboard = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const chit = await ChitFund.findById(chitId).lean();
+
+        if (!chit) {
+            return res.status(404).json({ success: false, message: 'Chit not found' });
+        }
+
+        if (chit.owner.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only the group owner can view the admin dashboard' });
+        }
+
+        // 1. Fetch Members & Payment Tracking
+        let subscriptions = await ChitSubscription.find({ chitFund: chitId }).lean();
+        
+        let members = [];
+        for (let sub of subscriptions) {
+            const userDoc = await User.findOne({ id: sub.user }).select('firstName lastName phone profilePic').lean();
+            if (userDoc) {
+                // Map transactions to exact months they paid for
+                const paidMonths = sub.transactions.map(t => t.monthNumber);
+                
+                members.push({
+                    user: userDoc,
+                    installmentsPaidCount: sub.installmentsPaid,
+                    paidMonths: paidMonths, // e.g. [1, 2] means paid for month 1 and 2
+                    hasWonAuction: sub.hasWonAuction,
+                    wonMonth: sub.wonMonth,
+                    status: sub.status,
+                    joinedAt: sub.createdAt
+                });
+            }
+        }
+
+        // 2. Fetch Auction Timeline
+        const ChitAuction = require('../models/ChitAuction');
+        const auctions = await ChitAuction.find({ chitFund: chitId }).sort({ monthNumber: 1 }).lean();
+        
+        // Build timeline from Month 1 to chit.totalMonths
+        let auctionTimeline = [];
+        for (let i = 1; i <= chit.totalMonths; i++) {
+            const auctionForMonth = auctions.find(a => a.monthNumber === i);
+            
+            if (auctionForMonth) {
+                // Populate winner info
+                const winnerDoc = await User.findOne({ id: auctionForMonth.winnerUserId }).select('firstName lastName phone').lean();
+                
+                auctionTimeline.push({
+                    monthNumber: i,
+                    status: 'completed',
+                    auctionDate: auctionForMonth.auctionDate,
+                    winner: winnerDoc,
+                    winningBidDiscount: auctionForMonth.winningBidDiscount,
+                    dividendPerMember: auctionForMonth.dividendPerMember,
+                    prizeMoneyPaid: auctionForMonth.prizeMoneyPaid
+                });
+            } else {
+                // Determine if this is the currently pending/active auction, or a future one
+                const status = (i === chit.completedMonths + 1 && chit.status === 'active') ? 'active' : 'pending';
+                
+                auctionTimeline.push({
+                    monthNumber: i,
+                    status: status,
+                    auctionDate: null,
+                    winner: null,
+                    winningBidDiscount: 0,
+                    dividendPerMember: 0,
+                    prizeMoneyPaid: 0
+                });
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            chitDetails: {
+                id: chit._id,
+                name: chit.name,
+                totalValue: chit.totalValue,
+                totalMonths: chit.totalMonths,
+                completedMonths: chit.completedMonths,
+                monthlySubscription: chit.monthlySubscription,
+                organizerFeePercent: chit.organizerFeePercent,
+                status: chit.status,
+                startDate: chit.startDate,
+                currentSubscribersCount: chit.currentSubscribersCount
+            },
+            members,
+            auctionTimeline
+        });
 
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });

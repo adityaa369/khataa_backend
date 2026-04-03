@@ -12,7 +12,8 @@ const {
     sendInvite,
     getMyInvites,
     respondToInvite,
-    getChitMembers
+    getChitMembers,
+    getAdminDashboard
 } = require('../controllers/chitFunds');
 
 const { protect } = require('../middleware/auth');
@@ -25,6 +26,7 @@ router.use(protect);
 router.route('/create').post(createChitFund);
 router.route('/vacant').get(getVacantChits);
 router.route('/:id/members').get(getChitMembers);
+router.route('/:id/admin-dashboard').get(getAdminDashboard);
 router.route('/:id/join').post(joinChit);
 router.route('/:id/installments').post(payInstallment);
 router.route('/:id/verify-installment').post(verifyInstallment);
