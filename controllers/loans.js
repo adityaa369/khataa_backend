@@ -161,7 +161,7 @@ exports.verifyLoan = async (req, res) => {
         console.log('\n--- LOAN APPROVAL DEBUG ---');
         console.log('Loan ID received:', req.params.id);
 
-        const currentUserPhone = req.user.phone.toString().replace(/^\+?91/, '');
+        const currentUserPhone = String(req.user.phone).replace(/\D/g, '').slice(-10);
         console.log('User attempting approval:', currentUserPhone);
 
         const loan = await Loan.findById(req.params.id);
@@ -171,7 +171,7 @@ exports.verifyLoan = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Loan not found' });
         }
 
-        const isBorrower = loan.borrowerPhone === currentUserPhone;
+        const isBorrower = String(loan.borrowerPhone).replace(/\D/g, '').slice(-10) === currentUserPhone;
 
         if (!isBorrower) {
             return res.status(403).json({ success: false, message: 'Only the designated borrower can approve this loan.' });

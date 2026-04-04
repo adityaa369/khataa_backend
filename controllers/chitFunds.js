@@ -570,7 +570,7 @@ exports.respondToInvite = async (req, res) => {
             await chit.save();
 
             // Fire FCM Notification to Group Owner
-            const owner = await User.findById(chit.owner);
+            const owner = await User.findOne({ id: chit.owner });
             if (owner && owner.fcmToken) {
                 const { sendPushNotification } = require('../utils/fcm');
                 await sendPushNotification(
