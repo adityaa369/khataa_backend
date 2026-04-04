@@ -13,7 +13,8 @@ const {
     getMyInvites,
     respondToInvite,
     getChitMembers,
-    getAdminDashboard
+    getAdminDashboard,
+    deleteChitFund
 } = require('../controllers/chitFunds');
 
 const { protect } = require('../middleware/auth');
