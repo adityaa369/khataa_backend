@@ -19,10 +19,7 @@ const ChitFundSchema = new mongoose.Schema({
         type: Number,
         required: [true, 'Please add monthly subscription value']
     },
-    organizerFeePercent: {
-        type: Number,
-        required: [true, 'Please specify the foreman commission/interest percentage']
-    },
+
     owner: {
         type: String, // Referencing custom user IDs
         ref: 'User',

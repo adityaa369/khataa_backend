@@ -77,9 +77,9 @@ exports.getChitMembers = async (req, res) => {
 // @access  Private
 exports.createChitFund = async (req, res) => {
     try {
-        const { name, totalValue, totalMonths, organizerFeePercent, branchName } = req.body;
+        const { name, totalValue, totalMonths, branchName } = req.body;
 
-        if (!name || !totalValue || !totalMonths || !organizerFeePercent) {
+        if (!name || !totalValue || !totalMonths) {
             return res.status(400).json({ success: false, message: 'Please provide all required fields' });
         }
 
@@ -90,7 +90,6 @@ exports.createChitFund = async (req, res) => {
             totalValue,
             totalMonths,
             monthlySubscription,
-            organizerFeePercent,
             branchName: branchName || 'HEAD-OFFICE',
             owner: req.user.id,
             status: 'registration',
@@ -327,14 +326,13 @@ exports.finalizeAuction = async (req, res) => {
         if (!auction) return res.status(400).json({ success: false, message: 'No bids exist for this month yet' });
 
         // Phase 3 Dividend Math
-        const organizerCommission = chit.totalValue * (chit.organizerFeePercent / 100);
-        const dividendPool = auction.winningBidDiscount - organizerCommission;
+        const dividendPool = auction.winningBidDiscount;
         
         // Members get the dividend
         auction.dividendPerMember = dividendPool > 0 ? (dividendPool / chit.totalMonths) : 0;
         
         // Winner gets the pot
-        auction.prizeMoneyPaid = chit.totalValue - auction.winningBidDiscount - organizerCommission;
+        auction.prizeMoneyPaid = chit.totalValue - auction.winningBidDiscount;
         await auction.save();
 
         // Mark the individual subscriber as having won!
@@ -605,9 +603,6 @@ exports.getAdminDashboard = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Chit not found' });
         }
 
-        if (chit.owner.toString() !== req.user.id) {
-            return res.status(403).json({ success: false, message: 'Only the group owner can view the admin dashboard' });
-        }
 
         // 1. Fetch Members & Payment Tracking
         let subscriptions = await ChitSubscription.find({ chitFund: chitId }).lean();
@@ -678,8 +673,8 @@ exports.getAdminDashboard = async (req, res) => {
                 totalMonths: chit.totalMonths,
                 completedMonths: chit.completedMonths,
                 monthlySubscription: chit.monthlySubscription,
-                organizerFeePercent: chit.organizerFeePercent,
                 status: chit.status,
+                isOwner: chit.owner.toString() === req.user.id,
                 startDate: chit.startDate,
                 currentSubscribersCount: chit.currentSubscribersCount
             },
