@@ -8,6 +8,25 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const app = express();
+const admin = require('firebase-admin');
+const fs = require('fs');
+const path = require('path');
+
+// Initialize Firebase Admin
+try {
+    const serviceAccountPath = path.join(__dirname, 'service-account.json');
+    if (fs.existsSync(serviceAccountPath)) {
+        const serviceAccount = require(serviceAccountPath);
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log('[Firebase] Admin SDK initialized successfully');
+    } else {
+        console.warn('⚠️ [Firebase] service-account.json not found. Push notifications will fail.');
+    }
+} catch (error) {
+    console.error('⚠️ [Firebase] Failed to initialize Admin SDK:', error.message);
+}
 
 // Middlewares
 app.use(cors());

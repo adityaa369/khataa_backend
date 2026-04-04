@@ -350,6 +350,22 @@ exports.finalizeAuction = async (req, res) => {
         }
         await chit.save();
 
+        // Broadcast notification to all active subscribers
+        const subscribers = await ChitSubscription.find({ chitFund: chitId });
+        const { sendPushNotification } = require('../utils/fcm');
+        
+        for (let sub of subscribers) {
+            const memberUser = await User.findOne({ id: sub.user });
+            if (memberUser && memberUser.fcmToken) {
+                await sendPushNotification(
+                    memberUser.fcmToken,
+                    'Chit Auction Finalized',
+                    `Auction for month ${targetMonth} is complete. Winner discount: ₹${auction.winningBidDiscount}. Your dividend: ₹${auction.dividendPerMember.toFixed(2)}.`,
+                    { type: 'AUCTION_FINALIZED', chitId: chit._id.toString() }
+                );
+            }
+        }
+
         res.status(200).json({ success: true, message: 'Auction finalized successfully', auction });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -682,6 +698,38 @@ exports.getAdminDashboard = async (req, res) => {
             auctionTimeline
         });
 
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Delete a Chit Fund (Owner Only)
+// @route   DELETE /api/chits/:id
+// @access  Private
+exports.deleteChitFund = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const chit = await ChitFund.findById(chitId);
+
+        if (!chit) {
+            return res.status(404).json({ success: false, message: 'Chit not found' });
+        }
+
+        if (chit.owner.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only the group owner can delete this chit fund' });
+        }
+
+        // Delete all associated data
+        await ChitSubscription.deleteMany({ chitFund: chitId });
+        const ChitAuction = require('../models/ChitAuction');
+        await ChitAuction.deleteMany({ chitFund: chitId });
+        const ChitInvite = require('../models/ChitInvite');
+        await ChitInvite.deleteMany({ chitFund: chitId });
+        
+        // Finally, delete the Chit Fund itself
+        await ChitFund.findByIdAndDelete(chitId);
+
+        res.status(200).json({ success: true, message: 'Chit Fund and all associated data deleted successfully' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }

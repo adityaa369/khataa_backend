@@ -39,5 +39,6 @@ router.route('/my').get(getMyChits);
 router.route('/auctions/pending').get(getPendingAuctions);
 router.route('/auctions/:id/authorize').post(authorizeBid);
 router.route('/:id/finalize-auction').post(finalizeAuction);
+router.route('/:id').delete(deleteChitFund);
 
 module.exports = router;

@@ -93,6 +93,16 @@ exports.createLoan = async (req, res) => {
 
         const loanResponse = loan.toObject();
 
+        if (borrower.fcmToken) {
+            const { sendPushNotification } = require('../utils/fcm');
+            await sendPushNotification(
+                borrower.fcmToken,
+                'New Agreement Request',
+                `${req.user.firstName || 'Someone'} has sent you a loan out for ₹${amount}. Review and accept.`,
+                { type: 'LOAN_CREATED', loanId: loan._id.toString() }
+            );
+        }
+
         res.status(201).json({
             success: true,
             message: 'Loan agreement sent to borrower for approval.',
@@ -214,6 +224,18 @@ exports.verifyLoan = async (req, res) => {
 
         console.log(`[DEBUG] Match! Activating Loan ${loan._id}`);
         await loan.save();
+
+        const lenderUser = await User.findOne({ id: loan.lender });
+        if (lenderUser && lenderUser.fcmToken) {
+            const { sendPushNotification } = require('../utils/fcm');
+            await sendPushNotification(
+                lenderUser.fcmToken,
+                'Agreement Accepted',
+                `${req.user.firstName || 'A borrower'} has signed and accepted your loan agreement for ₹${loan.amount}.`,
+                { type: 'LOAN_VERIFIED', loanId: loan._id.toString() }
+            );
+        }
+        
         console.log('--- END DEBUG ---\n');
 
         res.status(200).json({ success: true, loan });

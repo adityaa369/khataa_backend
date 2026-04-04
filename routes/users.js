@@ -75,4 +75,26 @@ router.post('/check-phone', async (req, res) => {
     }
 });
 
+// @desc    Update FCM Token for Push Notifications
+// @route   POST /api/users/fcm-token
+// @access  Private
+router.post('/fcm-token', async (req, res) => {
+    try {
+        const { fcmToken } = req.body;
+        if (!fcmToken) {
+            return res.status(400).json({ success: false, message: 'fcmToken required' });
+        }
+
+        const user = await User.findOneAndUpdate(
+            { id: req.user.id },
+            { fcmToken },
+            { new: true }
+        );
+
+        res.status(200).json({ success: true, message: 'FCM Token updated successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 module.exports = router;

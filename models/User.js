@@ -27,6 +27,10 @@ const UserSchema = new mongoose.Schema({
     aadhar: String,
     dob: String,
     gender: String,
+    fcmToken: {
+        type: String,
+        required: false
+    },
     isVerified: {
         type: Boolean,
         default: false
