@@ -39,7 +39,7 @@ const LoanSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending_otp', 'pending_approval', 'active', 'completed', 'overdue', 'due_soon', 'defaulted'],
+        enum: ['pending_otp', 'pending_approval', 'active', 'completed', 'overdue', 'due_soon', 'defaulted', 'rejected', 'closed'],
         default: 'pending_approval'
     },
     progress: {
@@ -66,6 +66,10 @@ const LoanSchema = new mongoose.Schema({
     isOtpVerified: {
         type: Boolean,
         default: false
+    },
+    documentUrl: {
+        type: String,
+        required: false
     }
 }, {
     timestamps: true

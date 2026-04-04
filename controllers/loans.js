@@ -18,7 +18,8 @@ exports.createLoan = async (req, res) => {
             interest_rate,
             duration_months,
             type,
-            transaction_id
+            transaction_id,
+            documentUrl
         } = req.body;
 
         // Sanitize phone: strip 91 or +91
@@ -88,7 +89,8 @@ exports.createLoan = async (req, res) => {
             durationMonths,
             loanType,
             status: 'pending_approval',
-            transaction_id
+            transaction_id,
+            documentUrl
         });
 
         const loanResponse = loan.toObject();
