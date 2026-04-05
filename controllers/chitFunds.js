@@ -322,10 +322,32 @@ exports.finalizeAuction = async (req, res) => {
         const ChitAuction = require('../models/ChitAuction');
         const targetMonth = chit.completedMonths + 1;
 
-        const auction = await ChitAuction.findOne({ chitFund: chitId, monthNumber: targetMonth });
-        if (!auction) return res.status(400).json({ success: false, message: 'No bids exist for this month yet' });
-
-        // Phase 3 Dividend Math
+        const { winnerUserId, bidDiscount } = req.body;
+        
+        let auction = await ChitAuction.findOne({ chitFund: chitId, monthNumber: targetMonth });
+        
+        // Manual Finalize bypass: If Owner inputs explicitly via Dashboard, create/overwrite it
+        if (winnerUserId && typeof bidDiscount === 'number') {
+            if (bidDiscount > (chit.totalValue * 0.40)) {
+                 return res.status(400).json({ success: false, message: 'Bid exceeds maximum 40% cap' });
+            }
+            if (!auction) {
+                 auction = await ChitAuction.create({
+                     chitFund: chitId,
+                     monthNumber: targetMonth,
+                     auctionDate: new Date(),
+                     winnerUserId: winnerUserId,
+                     winningBidDiscount: bidDiscount,
+                     dividendPerMember: 0,
+                     prizeMoneyPaid: 0
+                 });
+            } else {
+                 auction.winnerUserId = winnerUserId;
+                 auction.winningBidDiscount = bidDiscount;
+            }
+        }
+        
+        if (!auction) return res.status(400).json({ success: false, message: 'No bids exist for this month yet. Provide a winner manually.' });
         const dividendPool = auction.winningBidDiscount;
         
         // Members get the dividend
