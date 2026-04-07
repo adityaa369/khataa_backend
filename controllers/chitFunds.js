@@ -105,12 +105,13 @@ exports.createChitFund = async (req, res) => {
     }
 };
 
-// @desc    Get all vacant chits (registration phase)
+// @desc    Get all owned chits (registration, active, completed)
 // @route   GET /api/chits/vacant
 // @access  Private
 exports.getVacantChits = async (req, res) => {
     try {
-        const chits = await ChitFund.find({ status: 'registration', owner: req.user.id });
+        // Fetch all chits owned by this user
+        const chits = await ChitFund.find({ owner: req.user.id });
         res.status(200).json({ success: true, chits });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -752,6 +753,174 @@ exports.deleteChitFund = async (req, res) => {
         await ChitFund.findByIdAndDelete(chitId);
 
         res.status(200).json({ success: true, message: 'Chit Fund and all associated data deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Open an auction for a specific month
+// @route   POST /api/chits/:id/auction/open
+// @access  Private (Owner Only)
+exports.openAuctionMonth = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const { monthNumber, baseAmount } = req.body;
+
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit not found' });
+
+        if (chit.owner.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only the group owner can open an auction' });
+        }
+
+        chit.activeAuctionMonth = monthNumber;
+        chit.activeAuctionBaseAmount = baseAmount;
+        await chit.save();
+
+        // Broadcast notification to all active subscribers
+        const ChitSubscription = require('../models/ChitSubscription');
+        const subscribers = await ChitSubscription.find({ chitFund: chitId });
+        const { sendPushNotification } = require('../utils/fcm');
+        
+        for (let sub of subscribers) {
+            const memberUser = await User.findOne({ id: sub.user });
+            if (memberUser && memberUser.fcmToken) {
+                await sendPushNotification(
+                    memberUser.fcmToken,
+                    `Auction Opened for Month ${monthNumber}`,
+                    `The auction for ${chit.name} is now open! Please submit your bids or pay the due amount of ₹${baseAmount}.`,
+                    { type: 'AUCTION_OPENED', chitId: chit._id.toString() }
+                );
+            }
+        }
+
+        res.status(200).json({ success: true, message: `Auction opened for month ${monthNumber}` });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    User submits a bid for the open auction month
+// @route   POST /api/chits/:id/auction/bid
+// @access  Private
+exports.submitBid = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const { bidDiscount } = req.body;
+        
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit not found' });
+        
+        if (!chit.activeAuctionMonth) {
+             return res.status(400).json({ success: false, message: 'No auction is currently open for bidding' });
+        }
+
+        const ChitSubscription = require('../models/ChitSubscription');
+        const sub = await ChitSubscription.findOne({ user: req.user.id, chitFund: chitId });
+        if (!sub) return res.status(403).json({ success: false, message: 'Not subscribed to this chit fund' });
+
+        if (sub.hasWonAuction) {
+             return res.status(403).json({ success: false, message: 'You have already won a previous auction' });
+        }
+
+        const ChitBid = require('../models/ChitBid');
+        
+        let existingBid = await ChitBid.findOne({ chitFund: chitId, monthNumber: chit.activeAuctionMonth, user: req.user.id });
+        if (existingBid) {
+            existingBid.bidDiscount = bidDiscount;
+            await existingBid.save();
+        } else {
+            await ChitBid.create({
+                chitFund: chitId,
+                monthNumber: chit.activeAuctionMonth,
+                user: req.user.id,
+                bidDiscount
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'Bid submitted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Get all bids for a specific auction month
+// @route   GET /api/chits/:id/auction/:month/bids
+// @access  Private (Owner Only)
+exports.getAuctionBids = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const monthNumber = parseInt(req.params.month);
+        
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit not found' });
+        
+        if (chit.owner.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only the group owner can view bids' });
+        }
+
+        const ChitBid = require('../models/ChitBid');
+        let bids = await ChitBid.find({ chitFund: chitId, monthNumber }).sort({ bidDiscount: -1 }).lean();
+        
+        for (let bid of bids) {
+            const userDoc = await User.findOne({ id: bid.user }).select('firstName lastName phone').lean();
+            bid.user = userDoc;
+        }
+
+        res.status(200).json({ success: true, bids });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Verify a member's payment for a specific month
+// @route   POST /api/chits/:id/auction/:month/verify-payment
+// @access  Private (Owner Only)
+exports.verifyMonthPayment = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const monthNumber = parseInt(req.params.month);
+        const { subscriberId, isPaid } = req.body;
+
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit not found' });
+
+        if (chit.owner.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only the group owner can verify payments' });
+        }
+
+        const ChitSubscription = require('../models/ChitSubscription');
+        const sub = await ChitSubscription.findById(subscriberId);
+        if (!sub) return res.status(404).json({ success: false, message: 'Subscription not found' });
+
+        // Update the transactions array to reflect payment for this specific month
+        if (isPaid) {
+            // Check if already paid
+            const existingTx = sub.transactions.find(t => t.monthNumber === monthNumber);
+            if (!existingTx) {
+                sub.transactions.push({
+                    monthNumber,
+                    amountPaid: chit.activeAuctionBaseAmount || (chit.totalValue / chit.totalMonths), // approximate fallback
+                    transactionId: 'MANUAL_OWNER_VERIFIED',
+                    date: new Date()
+                });
+                sub.installmentsPaid = sub.transactions.length;
+            }
+        } else {
+            // Remove the payment for this month if owner toggles it off
+            sub.transactions = sub.transactions.filter(t => t.monthNumber !== monthNumber);
+            sub.installmentsPaid = sub.transactions.length;
+        }
+
+        // Adjust defaulted status if they are up to date
+        if (sub.installmentsPaid >= chit.completedMonths) {
+            sub.status = 'active'; 
+        } else {
+            sub.status = 'defaulted';
+        }
+
+        await sub.save();
+        res.status(200).json({ success: true, message: `Payment status updated for month ${monthNumber}` });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }

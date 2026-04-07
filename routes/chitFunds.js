@@ -14,7 +14,11 @@ const {
     respondToInvite,
     getChitMembers,
     getAdminDashboard,
-    deleteChitFund
+    deleteChitFund,
+    openAuctionMonth,
+    submitBid,
+    getAuctionBids,
+    verifyMonthPayment
 } = require('../controllers/chitFunds');
 
 const { protect } = require('../middleware/auth');
@@ -41,5 +45,10 @@ router.route('/auctions/pending').get(getPendingAuctions);
 router.route('/auctions/:id/authorize').post(authorizeBid);
 router.route('/:id/finalize-auction').post(finalizeAuction);
 router.route('/:id').delete(deleteChitFund);
+
+router.route('/:id/auction/open').post(openAuctionMonth);
+router.route('/:id/auction/bid').post(submitBid);
+router.route('/:id/auction/:month/bids').get(getAuctionBids);
+router.route('/:id/auction/:month/verify-payment').post(verifyMonthPayment);
 
 module.exports = router;

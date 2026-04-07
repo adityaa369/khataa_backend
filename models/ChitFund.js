@@ -44,6 +44,14 @@ const ChitFundSchema = new mongoose.Schema({
     branchName: {
         type: String,
         default: 'KPHB-CAO'
+    },
+    activeAuctionMonth: {
+        type: Number,
+        default: null
+    },
+    activeAuctionBaseAmount: {
+        type: Number,
+        default: null
     }
 }, {
     timestamps: true
