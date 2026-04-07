@@ -715,7 +715,9 @@ exports.getAdminDashboard = async (req, res) => {
                 status: chit.status,
                 isOwner: chit.owner.toString() === req.user.id,
                 startDate: chit.startDate,
-                currentSubscribersCount: chit.currentSubscribersCount
+                currentSubscribersCount: chit.currentSubscribersCount,
+                activeAuctionMonth: chit.activeAuctionMonth,
+                activeAuctionBaseAmount: chit.activeAuctionBaseAmount
             },
             members,
             auctionTimeline
