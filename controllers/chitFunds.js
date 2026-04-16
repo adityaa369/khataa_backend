@@ -654,6 +654,7 @@ exports.getAdminDashboard = async (req, res) => {
                 const paidMonths = sub.transactions.map(t => t.monthNumber);
                 
                 members.push({
+                    id: sub._id,
                     user: userDoc,
                     installmentsPaidCount: sub.installmentsPaid,
                     paidMonths: paidMonths, // e.g. [1, 2] means paid for month 1 and 2
