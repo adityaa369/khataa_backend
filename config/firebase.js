@@ -4,15 +4,15 @@ const admin = require('firebase-admin');
 // In Render, it's best to base64 encode the JSON and put it in an ENV variable to parse.
 // For now, we initialize an empty app structure assuming GOOGLE_APPLICATION_CREDENTIALS or similar setup will be done.
 try {
-    // If FIREBASE_SERVICE_ACCOUNT is provided in environment as a stringified JSON
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
-    } else {
-        // Attempt default initialization (works if GOOGLE_APPLICATION_CREDENTIALS env var points to the downloaded JSON file)
-        admin.initializeApp();
+    if (!admin.apps.length) {
+        if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+            const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount)
+            });
+        } else {
+            admin.initializeApp();
+        }
     }
 } catch (error) {
     console.error('[Firebase] Initialization Error:', error.message);
