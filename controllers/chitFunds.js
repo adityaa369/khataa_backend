@@ -697,7 +697,7 @@ exports.getAdminDashboard = async (req, res) => {
                 });
             } else {
                 // Determine if this is the currently pending/active auction, or a future one
-                const status = (i === chit.completedMonths + 1 && chit.status === 'active') ? 'active' : 'pending';
+                const status = (i === chit.completedMonths + 1) ? 'active' : 'pending';
                 
                 auctionTimeline.push({
                     monthNumber: i,
@@ -785,6 +785,10 @@ exports.openAuctionMonth = async (req, res) => {
 
         chit.activeAuctionMonth = monthNumber;
         chit.activeAuctionBaseAmount = baseAmount;
+        if (chit.status === 'registration') {
+            chit.status = 'active';
+            chit.startDate = new Date();
+        }
         await chit.save();
 
         // Broadcast notification to all active subscribers
