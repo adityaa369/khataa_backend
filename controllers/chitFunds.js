@@ -651,12 +651,19 @@ exports.getAdminDashboard = async (req, res) => {
             const userDoc = await User.findOne({ id: sub.user }).select('firstName lastName phone profilePic').lean();
             if (userDoc) {
                 // Map transactions to exact months they paid for
-                const paidMonths = sub.transactions.map(t => t.monthNumber);
+                let paidMonths = sub.transactions.map(t => t.monthNumber);
+                let installmentsPaidCount = sub.installmentsPaid;
+                
+                // Privacy Check: Only owner or the exact member themselves can see their payment statuses
+                if (chit.owner.toString() !== req.user.id && sub.user !== req.user.id) {
+                    paidMonths = [];
+                    installmentsPaidCount = 0;
+                }
                 
                 members.push({
                     id: sub._id,
                     user: userDoc,
-                    installmentsPaidCount: sub.installmentsPaid,
+                    installmentsPaidCount: installmentsPaidCount,
                     paidMonths: paidMonths, // e.g. [1, 2] means paid for month 1 and 2
                     hasWonAuction: sub.hasWonAuction,
                     wonMonth: sub.wonMonth,

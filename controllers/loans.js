@@ -453,7 +453,7 @@ exports.closeLoan = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid closure OTP' });
         }
 
-        loan.status = 'closed';
+        loan.status = 'completed';
         loan.progress = 1.0;
         loan.isOtpVerified = true; // reusing field just to mark full authentication
         
