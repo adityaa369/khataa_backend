@@ -7,6 +7,7 @@ const {
     resendLoanOtp,
     updateProgress,
     verifyLenderOtp,
+    requestClosureOtp,
     closeLoan
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
@@ -22,6 +23,7 @@ router.post('/:id/verify', verifyLoan);
 router.post('/:id/verify-lender-otp', verifyLenderOtp);
 router.post('/:id/resend-otp', resendLoanOtp);
 router.patch('/:id/progress', updateProgress);
+router.post('/:id/close-otp', requestClosureOtp);
 router.post('/:id/close', closeLoan);
 
 module.exports = router;
