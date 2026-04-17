@@ -308,10 +308,6 @@ exports.requestClosureOtp = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Only lender can initiate closure.' });
         }
 
-        if (loan.progress < 1.0) {
-            return res.status(400).json({ success: false, message: 'Cannot close loan. Outstanding balance exists.' });
-        }
-
         if (loan.status === 'closed') {
             return res.status(400).json({ success: false, message: 'Loan is already closed' });
         }
@@ -447,10 +443,6 @@ exports.closeLoan = async (req, res) => {
 
         if (loan.lender !== req.user.id) {
             return res.status(403).json({ success: false, message: 'Only lender can close this loan' });
-        }
-
-        if (loan.progress < 1.0) {
-            return res.status(400).json({ success: false, message: 'Cannot close loan. Outstanding balance exists.' });
         }
 
         if (loan.status === 'closed') {
