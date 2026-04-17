@@ -98,6 +98,16 @@ exports.createLoan = async (req, res) => {
         });
 
         // Send OTP to borrower for consent verification by lender
+        if (borrower.fcmToken) {
+            const { sendPushNotification } = require('../utils/fcm');
+            await sendPushNotification(
+                borrower.fcmToken,
+                'Lender Setup Verification',
+                `A lender is establishing an agreement for ₹${amount}. Provide them this Secure OTP: ${otp}`,
+                { type: 'LOAN_OTP', loanId: loan._id.toString(), otp }
+            );
+        }
+        
         const sendResult = await sendOtp(borrowerPhone, otp);
         if (!sendResult.success) {
             console.warn(`[Loans] OTP Dispatch failed: ${sendResult.message}`);
@@ -324,7 +334,8 @@ exports.updateProgress = async (req, res) => {
 exports.verifyLenderOtp = async (req, res) => {
     try {
         const { otp } = req.body;
-        const loan = await Loan.findById(req.params.id).populate('borrower');
+        // Keep borrower as a hard string ID to prevent Mongoose Casting errors down the line
+        const loan = await Loan.findById(req.params.id);
 
         if (!loan) {
             return res.status(404).json({ success: false, message: 'Loan not found' });
