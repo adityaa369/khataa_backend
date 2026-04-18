@@ -17,6 +17,7 @@ exports.createLoan = async (req, res) => {
             amount,
             interest_rate,
             duration_months,
+            duration_type,
             type,
             transaction_id,
             documentUrl
@@ -29,6 +30,7 @@ exports.createLoan = async (req, res) => {
         const borrowerAddress = borrower_address;
         const interestRate = interest_rate;
         const durationMonths = duration_months;
+        const durationType = duration_type || 'Months';
         const loanType = type || 'personal';
 
         if (borrowerPhone === req.user.phone) {
@@ -89,6 +91,7 @@ exports.createLoan = async (req, res) => {
             amount,
             interestRate,
             durationMonths,
+            durationType,
             loanType,
             status: 'pending_otp',
             transaction_id,
@@ -214,22 +217,27 @@ exports.verifyLoan = async (req, res) => {
 
             // Set end date based on duration
             const endDate = new Date(startDate);
-            endDate.setMonth(endDate.getMonth() + loan.durationMonths);
-            loan.endDate = endDate;
-
-            // Set next due date to next month
             const nextDueDate = new Date(startDate);
-            nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+            
+            if (loan.durationType === 'Days') {
+                endDate.setDate(endDate.getDate() + loan.durationMonths);
+                nextDueDate.setDate(nextDueDate.getDate() + Math.min(30, loan.durationMonths));
+            } else {
+                endDate.setMonth(endDate.getMonth() + loan.durationMonths);
+                nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+            }
+            
+            loan.endDate = endDate;
             loan.nextDueDate = nextDueDate;
 
             if (loan.interestRate > 0) {
                 const P = loan.amount;
                 const r = loan.interestRate / 100 / 12; // Monthly rate
-                const n = loan.durationMonths;
+                const n = loan.durationType === 'Days' ? (loan.durationMonths / 30) : loan.durationMonths;
 
                 const emi = P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
                 loan.emiAmount = emi;
-                loan.totalPayable = emi * n;
+                loan.totalPayable = emi * (loan.durationType === 'Days' ? 1 : n);
             } else {
                 loan.emiAmount = loan.amount / loan.durationMonths;
                 loan.totalPayable = loan.amount;

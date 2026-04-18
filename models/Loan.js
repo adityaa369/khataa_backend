@@ -37,6 +37,11 @@ const LoanSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    durationType: {
+        type: String,
+        enum: ['Days', 'Months', 'Years'],
+        default: 'Months'
+    },
     status: {
         type: String,
         enum: ['pending_otp', 'pending_approval', 'active', 'completed', 'overdue', 'due_soon', 'defaulted', 'rejected', 'closed'],
