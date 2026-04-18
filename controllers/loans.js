@@ -138,7 +138,41 @@ exports.createLoan = async (req, res) => {
 exports.getGivenLoans = async (req, res) => {
     try {
         const loans = await Loan.find({ lender: req.user.id });
-        res.status(200).json({ success: true, loans });
+        const loansMapped = [];
+        for (const loan of loans) {
+            loansMapped.push(loan.toObject ? loan.toObject() : loan);
+        }
+        
+        // --- CHIT FUNDS AGGREGATION ---
+        const ChitFund = require('../models/ChitFund');
+        const ownedChits = await ChitFund.find({ owner: req.user.id });
+
+        for (const chit of ownedChits) {
+            loansMapped.push({
+                _id: chit._id,
+                loanType: 'chitfund',
+                amount: chit.totalValue,
+                interestRate: 0,
+                durationMonths: chit.totalMonths,
+                status: chit.status === 'completed' ? 'completed' : 'active',
+                progress: (chit.completedMonths || 0) / (chit.totalMonths || 1),
+                startDate: chit.startDate || chit.createdAt,
+                endDate: null,
+                lenderName: `${req.user.firstName || ''} ${req.user.lastName || ''}`,
+                borrowerName: `${chit.currentSubscribersCount} Member(s)`,
+                borrowerPhone: 'N/A',
+                emiAmount: chit.monthlySubscription,
+                createdAt: chit.createdAt
+            });
+        }
+        
+        loansMapped.sort((a, b) => {
+            const aDate = new Date(a.createdAt || a.startDate || 0);
+            const bDate = new Date(b.createdAt || b.startDate || 0);
+            return bDate - aDate;
+        });
+
+        res.status(200).json({ success: true, loans: loansMapped });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -163,7 +197,7 @@ exports.getTakenLoans = async (req, res) => {
         const loansWithLender = [];
         for (const loan of loans) {
             const lenderUser = await User.findOne({ id: loan.lender });
-            const loanObj = loan.toObject();
+            const loanObj = loan.toObject ? loan.toObject() : loan;
             if (lenderUser) {
                 loanObj.lenderName = `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() || 'Unknown Lender';
             } else {
@@ -171,6 +205,43 @@ exports.getTakenLoans = async (req, res) => {
             }
             loansWithLender.push(loanObj);
         }
+
+        // --- CHIT SUBSCRIPTIONS AGGREGATION ---
+        const ChitSubscription = require('../models/ChitSubscription');
+        const ChitFund = require('../models/ChitFund');
+
+        const activeChits = await ChitSubscription.find({ user: req.user.id }).populate('chitFund');
+        for (const sub of activeChits) {
+            if (!sub.chitFund) continue;
+            const chitFund = sub.chitFund;
+            
+            const groupOwner = await User.findOne({ id: chitFund.owner });
+            const ownerName = groupOwner ? `${groupOwner.firstName || ''} ${groupOwner.lastName || ''}`.trim() : 'Unknown Network';
+
+            loansWithLender.push({
+                _id: sub._id,
+                loanType: 'chitfund',
+                amount: chitFund.totalValue,
+                interestRate: 0,
+                durationMonths: chitFund.totalMonths,
+                status: sub.status === 'completed' ? 'completed' : 'active',
+                progress: (sub.installmentsPaid || 0) / (chitFund.totalMonths || 1),
+                startDate: chitFund.startDate || chitFund.createdAt,
+                endDate: null,
+                lenderName: ownerName,
+                borrowerName: `${req.user.firstName || ''} ${req.user.lastName || ''}`,
+                borrowerPhone: req.user.phone,
+                emiAmount: chitFund.monthlySubscription,
+                createdAt: sub.createdAt
+            });
+        }
+
+        // Sort combined list by created date descending
+        loansWithLender.sort((a, b) => {
+            const aDate = new Date(a.createdAt || a.startDate || 0);
+            const bDate = new Date(b.createdAt || b.startDate || 0);
+            return bDate - aDate;
+        });
 
         res.status(200).json({ success: true, loans: loansWithLender });
     } catch (err) {
