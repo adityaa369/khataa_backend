@@ -106,7 +106,7 @@ exports.createLoan = async (req, res) => {
             await sendPushNotification(
                 borrower.fcmToken,
                 'Lender Setup Verification',
-                `A lender is establishing an agreement for ₹${amount}. Provide them this Secure OTP: ${otp}`,
+                `${otp} is the secured otp for your loan setup of ₹${amount}.`,
                 { type: 'LOAN_OTP', loanId: loan._id.toString(), otp }
             );
         }
