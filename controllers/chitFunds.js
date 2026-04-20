@@ -924,9 +924,15 @@ exports.verifyMonthPayment = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Only the group owner can verify payments' });
         }
 
+        if (subscriberId === 'synthetic_owner_sub') {
+            return res.status(200).json({ success: true, message: 'Owner payments are automatically verified' });
+        }
+
         const ChitSubscription = require('../models/ChitSubscription');
         const sub = await ChitSubscription.findById(subscriberId);
         if (!sub) return res.status(404).json({ success: false, message: 'Subscription not found' });
+        
+        if (!sub.transactions) sub.transactions = [];
 
         // Update the transactions array to reflect payment for this specific month
         if (isPaid) {
