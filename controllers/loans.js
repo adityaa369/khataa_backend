@@ -403,7 +403,7 @@ exports.requestClosureOtp = async (req, res) => {
             await sendPushNotification(
                 borrowerUser.fcmToken,
                 'Agreement Closure Request',
-                `A lender is finalizing the closure of your loan for ₹${loan.amount}. Provide them this Closure OTP: ${otp}`,
+                `${otp} is the secured otp to confirm the closure of your loan agreement for ₹${loan.amount}.`,
                 { type: 'LOAN_CLOSURE_OTP', loanId: loan._id.toString(), otp }
             );
         }
