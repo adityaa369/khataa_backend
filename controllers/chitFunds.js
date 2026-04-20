@@ -648,12 +648,16 @@ exports.getAdminDashboard = async (req, res) => {
         let subscriptions = await ChitSubscription.find({ chitFund: chitId }).lean();
         
         let members = [];
+        let ownerFound = false;
+
         for (let sub of subscriptions) {
-            const userDoc = await User.findOne({ id: sub.user }).select('firstName lastName phone profilePic').lean();
+            if (sub.user === chit.owner.toString()) ownerFound = true;
+
+            const userDoc = await User.findOne({ id: sub.user }).select('id firstName lastName phone profilePic').lean();
             if (userDoc) {
                 // Map transactions to exact months they paid for
-                let paidMonths = sub.transactions.map(t => t.monthNumber);
-                let installmentsPaidCount = sub.installmentsPaid;
+                let paidMonths = sub.transactions ? sub.transactions.map(t => t.monthNumber) : [];
+                let installmentsPaidCount = sub.installmentsPaid || 0;
                 
                 // Privacy Check: Only owner or the exact member themselves can see their payment statuses
                 if (chit.owner.toString() !== req.user.id && sub.user !== req.user.id) {
@@ -670,6 +674,22 @@ exports.getAdminDashboard = async (req, res) => {
                     wonMonth: sub.wonMonth,
                     status: sub.status,
                     joinedAt: sub.createdAt
+                });
+            }
+        }
+
+        // Auto-inject owner if missing (backward compatibility for old chit groups)
+        if (!ownerFound) {
+            const ownerDoc = await User.findOne({ id: chit.owner.toString() }).select('id firstName lastName phone profilePic').lean();
+            if (ownerDoc) {
+                members.unshift({
+                    id: 'synthetic_owner_sub',
+                    user: ownerDoc,
+                    installmentsPaidCount: chit.completedMonths || 0,
+                    paidMonths: [], // Owner doesn't strictly pay themselves, or we don't track it here
+                    hasWonAuction: false,
+                    status: 'active',
+                    joinedAt: chit.createdAt
                 });
             }
         }
