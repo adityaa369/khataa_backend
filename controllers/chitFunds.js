@@ -816,7 +816,6 @@ exports.openAuctionMonth = async (req, res) => {
         const ChitSubscription = require('../models/ChitSubscription');
         const subscribers = await ChitSubscription.find({ chitFund: chitId });
         const { sendPushNotification } = require('../utils/fcm');
-        const winnerDoc = await User.findOne({ id: auction.winnerUserId }).select('firstName lastName').lean();
         
         for (let sub of subscribers) {
             const memberUser = await User.findOne({ id: sub.user });
