@@ -376,6 +376,7 @@ exports.finalizeAuction = async (req, res) => {
         // Broadcast notification to all active subscribers
         const subscribers = await ChitSubscription.find({ chitFund: chitId });
         const { sendPushNotification } = require('../utils/fcm');
+        const winnerDoc = await User.findOne({ id: auction.winnerUserId }).select('firstName lastName').lean();
         
         for (let sub of subscribers) {
             const memberUser = await User.findOne({ id: sub.user });
@@ -383,7 +384,7 @@ exports.finalizeAuction = async (req, res) => {
                 await sendPushNotification(
                     memberUser.fcmToken,
                     'Chit Auction Finalized',
-                    `Auction for month ${targetMonth} is complete. Winner discount: ₹${auction.winningBidDiscount}. Your dividend: ₹${auction.dividendPerMember.toFixed(2)}.`,
+                    `${winnerDoc ? winnerDoc.firstName : 'A member'} won! Auction for month ${targetMonth} is complete. Winner discount: ₹${auction.winningBidDiscount}. Your dividend: ₹${auction.dividendPerMember.toFixed(2)}.`,
                     { type: 'AUCTION_FINALIZED', chitId: chit._id.toString() }
                 );
             }
@@ -795,6 +796,7 @@ exports.openAuctionMonth = async (req, res) => {
         const ChitSubscription = require('../models/ChitSubscription');
         const subscribers = await ChitSubscription.find({ chitFund: chitId });
         const { sendPushNotification } = require('../utils/fcm');
+        const winnerDoc = await User.findOne({ id: auction.winnerUserId }).select('firstName lastName').lean();
         
         for (let sub of subscribers) {
             const memberUser = await User.findOne({ id: sub.user });
