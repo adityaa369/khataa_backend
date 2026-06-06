@@ -24,6 +24,7 @@ const UserSchema = new mongoose.Schema({
         sparse: true
     },
     city: String,
+    address: String,
     password: {
         type: String,
         required: false

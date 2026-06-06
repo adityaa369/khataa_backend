@@ -34,7 +34,7 @@ exports.verifyOtp = async (req, res) => {
         const registrationDetails = req.body.registrationDetails;
         let updates = {};
         if (registrationDetails) {
-            const allowedFields = ['firstName', 'lastName', 'email', 'city'];
+            const allowedFields = ['firstName', 'lastName', 'email', 'city', 'address', 'pan', 'aadhar', 'dob', 'gender'];
             allowedFields.forEach(field => {
                 if (registrationDetails[field] !== undefined) {
                     updates[field] = registrationDetails[field];
