@@ -11,7 +11,6 @@ router.post('/send-otp', (req, res) => {
 
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/login-password', authController.loginPassword);
-router.post('/verify-token', authController.verifyToken); // Keep for legacy if needed
 router.post('/register', require('../middleware/auth'), authController.register);
 router.get('/me', require('../middleware/auth'), authController.getMe);
 
