@@ -12,6 +12,8 @@ router.post('/send-otp', (req, res) => {
 
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/login-password', authController.loginPassword);
+router.post('/send-otp-msg91', authController.sendOtpMsg91);
+router.post('/verify-otp-msg91', authController.verifyOtpMsg91);
 router.post('/register', protect, authController.register);
 router.get('/me', protect, authController.getMe);
 
