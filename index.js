@@ -12,6 +12,19 @@ const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
 
+// Helper to safely parse stringified Firebase service account, handling missing outer braces
+const parseServiceAccount = (rawEnv) => {
+    if (!rawEnv) return null;
+    let jsonStr = rawEnv.trim();
+    if (!jsonStr.startsWith('{')) {
+        jsonStr = '{' + jsonStr;
+    }
+    if (!jsonStr.endsWith('}')) {
+        jsonStr = jsonStr + '}';
+    }
+    return JSON.parse(jsonStr);
+};
+
 // Initialize Firebase Admin
 try {
     if (!admin.apps.length) {
@@ -23,7 +36,7 @@ try {
             });
             console.log('[Firebase] Admin SDK initialized via service-account.json (Local)');
         } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-            const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            const serviceAccount = parseServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT);
             admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount)
             });
