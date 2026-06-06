@@ -23,14 +23,15 @@ const UserSchema = new mongoose.Schema({
         type: String,
         sparse: true
     },
+    city: String,
+    password: {
+        type: String,
+        required: false
+    },
     pan: String,
     aadhar: String,
     dob: String,
     gender: String,
-    fcmToken: {
-        type: String,
-        required: false
-    },
     isVerified: {
         type: Boolean,
         default: false
