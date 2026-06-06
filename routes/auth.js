@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth');
+const { protect } = require('../middleware/auth');
 
 // Note: /send-otp is no longer needed since Firebase SDK sends it from the client
 // We keep it returning success to not break existing app flows immediately 
@@ -11,7 +12,7 @@ router.post('/send-otp', (req, res) => {
 
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/login-password', authController.loginPassword);
-router.post('/register', require('../middleware/auth'), authController.register);
-router.get('/me', require('../middleware/auth'), authController.getMe);
+router.post('/register', protect, authController.register);
+router.get('/me', protect, authController.getMe);
 
 module.exports = router;
