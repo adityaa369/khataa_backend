@@ -3,6 +3,7 @@ const User = require('../models/User');
 const { sendOtp } = require('../utils/otpProvider');
 const { sendPushNotification } = require('../utils/fcm');
 const { updateCreditScore } = require('../utils/creditScoreCalc');
+const { sendEmail } = require('../utils/email');
 
 // @desc    Create a new loan
 // @route   POST /api/loans
@@ -62,6 +63,14 @@ exports.createLoan = async (req, res) => {
             });
         }
 
+        if (!borrower.email) {
+            console.error(`[Loans] Borrower ${borrowerPhone} does not have a registered email.`);
+            return res.status(400).json({
+                success: false,
+                message: 'Borrower does not have a registered email address. Please ask them to update their profile first.'
+            });
+        }
+
         // Prevent Duplicate Loans via accidental multiple clicks (Issue Fix)
         const twoMinsAgo = new Date(Date.now() - 2 * 60 * 1000);
         const duplicateLoan = await Loan.findOne({
@@ -100,20 +109,40 @@ exports.createLoan = async (req, res) => {
             isOtpVerified: false
         });
 
-        // Send OTP to borrower for consent verification by lender
+        // Send OTP to borrower for consent verification by lender via Email
+        const lenderName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'A lender';
+        const emailSubject = `Verify Loan Agreement Setup OTP - Khatha`;
+        const emailText = `Hello,\n\nA new loan agreement of ₹${amount} has been initiated with you by ${lenderName}.\nYour verification OTP code is: ${otp}\n\nPlease provide this OTP to your lender to set up the agreement.\n\nRegards,\nKhatha Team`;
+        const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+          <h2 style="color: #4A90E2; text-align: center;">Khatha Agreement Verification</h2>
+          <hr style="border: 0; border-top: 1px solid #e0e0e0;">
+          <p>Hello,</p>
+          <p>A new credit agreement has been initiated for you on <strong>Khatha</strong> by <strong>${lenderName}</strong>.</p>
+          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p style="margin: 5px 0;"><strong>Agreement Details:</strong></p>
+            <p style="margin: 5px 0;">Lender Name: <strong>${lenderName}</strong></p>
+            <p style="margin: 5px 0;">Amount: <strong style="color: #2ECC71;">₹${amount}</strong></p>
+            <p style="margin: 5px 0;">Interest Rate: <strong>${interestRate}%</strong></p>
+          </div>
+          <p style="text-align: center; font-size: 16px; margin-top: 30px;">Your Verification OTP Code is:</p>
+          <div style="text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #4A90E2; margin: 10px 0; padding: 10px; border: 1px dashed #4A90E2; display: inline-block; width: 100%;">
+            ${otp}
+          </div>
+          <p style="color: #7f8c8d; font-size: 12px; margin-top: 30px; text-align: center;">This OTP is valid for this transaction. If you did not request this, please ignore this email.</p>
+        </div>`;
+
+        await sendEmail({ to: borrower.email, subject: emailSubject, text: emailText, html: emailHtml });
+
+        // Send FCM alert telling borrower to check email for OTP
         if (borrower.fcmToken) {
             const { sendPushNotification } = require('../utils/fcm');
             await sendPushNotification(
                 borrower.fcmToken,
                 'Lender Setup Verification',
-                `${otp} is the secured otp for your loan setup of ₹${amount}.`,
+                `A credit agreement setup for ₹${amount} has been initiated. Please check your email (${borrower.email}) for the verification OTP.`,
                 { type: 'LOAN_OTP', loanId: loan._id.toString(), otp }
             );
-        }
-        
-        const sendResult = await sendOtp(borrowerPhone, otp);
-        if (!sendResult.success) {
-            console.warn(`[Loans] OTP Dispatch failed: ${sendResult.message}`);
         }
 
         const loanResponse = loan.toObject();
@@ -371,17 +400,53 @@ exports.resendLoanOtp = async (req, res) => {
         loan.otp = otp;
         await loan.save();
 
-        // Send OTP to borrower
-        const sendResult = await sendOtp(loan.borrowerPhone, otp);
-
-        if (!sendResult.success) {
-            return res.status(500).json({
+        // Get borrower email
+        const borrower = await User.findOne({ phone: loan.borrowerPhone });
+        if (!borrower || !borrower.email) {
+            return res.status(400).json({
                 success: false,
-                message: `Failed to resend SMS. MSG91 Error: ${sendResult.error || sendResult.message}`
+                message: 'Borrower email not found. Cannot resend OTP via email.'
             });
         }
 
-        res.status(200).json({ success: true, message: 'OTP resent successfully' });
+        const lenderUser = await User.findOne({ id: loan.lender });
+        const lenderName = lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'A lender';
+
+        const emailSubject = `Verify Loan Agreement Setup OTP - Khatha (Resend)`;
+        const emailText = `Hello,\n\nA new loan agreement of ₹${loan.amount} has been initiated with you by ${lenderName}.\nYour verification OTP code is: ${otp}\n\nPlease provide this OTP to your lender to set up the agreement.\n\nRegards,\nKhatha Team`;
+        const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+          <h2 style="color: #4A90E2; text-align: center;">Khatha Agreement Verification</h2>
+          <hr style="border: 0; border-top: 1px solid #e0e0e0;">
+          <p>Hello,</p>
+          <p>A new credit agreement has been initiated for you on <strong>Khatha</strong> by <strong>${lenderName}</strong>.</p>
+          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p style="margin: 5px 0;"><strong>Agreement Details:</strong></p>
+            <p style="margin: 5px 0;">Lender Name: <strong>${lenderName}</strong></p>
+            <p style="margin: 5px 0;">Amount: <strong style="color: #2ECC71;">₹${loan.amount}</strong></p>
+            <p style="margin: 5px 0;">Interest Rate: <strong>${loan.interestRate}%</strong></p>
+          </div>
+          <p style="text-align: center; font-size: 16px; margin-top: 30px;">Your Verification OTP Code is:</p>
+          <div style="text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #4A90E2; margin: 10px 0; padding: 10px; border: 1px dashed #4A90E2; display: inline-block; width: 100%;">
+            ${otp}
+          </div>
+          <p style="color: #7f8c8d; font-size: 12px; margin-top: 30px; text-align: center;">This OTP is valid for this transaction. If you did not request this, please ignore this email.</p>
+        </div>`;
+
+        await sendEmail({ to: borrower.email, subject: emailSubject, text: emailText, html: emailHtml });
+
+        // Trigger FCM push notification alert to borrower as well
+        if (borrower.fcmToken) {
+            const { sendPushNotification } = require('../utils/fcm');
+            await sendPushNotification(
+                borrower.fcmToken,
+                'Lender Setup Verification',
+                `A credit agreement setup for ₹${loan.amount} has been initiated. Please check your email (${borrower.email}) for the verification OTP.`,
+                { type: 'LOAN_OTP', loanId: loan._id.toString(), otp }
+            );
+        }
+
+        res.status(200).json({ success: true, message: 'OTP resent successfully via email' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -411,22 +476,48 @@ exports.requestClosureOtp = async (req, res) => {
         loan.otp = otp;
         await loan.save();
 
-        // Push notify borrower about closure request
         const borrowerUser = await User.findOne({ id: loan.borrower });
-        if (borrowerUser && borrowerUser.fcmToken) {
+        if (!borrowerUser || !borrowerUser.email) {
+            return res.status(400).json({
+                success: false,
+                message: 'Borrower email not found. Cannot send closure OTP via email.'
+            });
+        }
+
+        const lenderUser = await User.findOne({ id: loan.lender });
+        const lenderName = lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'A lender';
+
+        const emailSubject = `Verify Loan Agreement Closure OTP - Khatha`;
+        const emailText = `Hello,\n\nA request to close/complete your credit agreement of ₹${loan.amount} has been initiated by ${lenderName}.\nYour closure verification OTP code is: ${otp}\n\nPlease provide this OTP to your lender to finalize and close the agreement.\n\nRegards,\nKhatha Team`;
+        const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+          <h2 style="color: #E74C3C; text-align: center;">Khatha Agreement Closure</h2>
+          <hr style="border: 0; border-top: 1px solid #e0e0e0;">
+          <p>Hello,</p>
+          <p>A request to close/complete your credit agreement has been initiated on <strong>Khatha</strong> by <strong>${lenderName}</strong>.</p>
+          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p style="margin: 5px 0;"><strong>Agreement Details:</strong></p>
+            <p style="margin: 5px 0;">Lender Name: <strong>${lenderName}</strong></p>
+            <p style="margin: 5px 0;">Amount: <strong style="color: #2ECC71;">₹${loan.amount}</strong></p>
+          </div>
+          <p style="text-align: center; font-size: 16px; margin-top: 30px;">Your Verification OTP Code is:</p>
+          <div style="text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #E74C3C; margin: 10px 0; padding: 10px; border: 1px dashed #E74C3C; display: inline-block; width: 100%;">
+            ${otp}
+          </div>
+          <p style="color: #7f8c8d; font-size: 12px; margin-top: 30px; text-align: center;">Please share this OTP with the lender to finalize and close the agreement. If you did not request this, please ignore this email.</p>
+        </div>`;
+
+        await sendEmail({ to: borrowerUser.email, subject: emailSubject, text: emailText, html: emailHtml });
+
+        // Push notify borrower about closure request
+        if (borrowerUser.fcmToken) {
             const { sendPushNotification } = require('../utils/fcm');
             await sendPushNotification(
                 borrowerUser.fcmToken,
                 'Agreement Closure Request',
-                `${otp} is the secured otp to confirm the closure of your loan agreement for ₹${loan.amount}.`,
+                `A closure request for your agreement of ₹${loan.amount} has been initiated. Please check your email (${borrowerUser.email}) for the verification OTP.`,
                 { type: 'LOAN_CLOSURE_OTP', loanId: loan._id.toString(), otp }
             );
-        }
-
-        // Fallback SMS
-        const sendResult = await sendOtp(loan.borrowerPhone, otp);
-        if (!sendResult.success) {
-            console.warn(`[Loans] Closure OTP SMS Dispatch failed: ${sendResult.message}`);
         }
 
         res.status(200).json({ success: true, message: 'Closure OTP sent to borrower safely.' });
