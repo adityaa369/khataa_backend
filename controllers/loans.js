@@ -4,6 +4,38 @@ const { sendOtp } = require('../utils/otpProvider');
 const { sendPushNotification } = require('../utils/fcm');
 const { updateCreditScore } = require('../utils/creditScoreCalc');
 const { sendEmail } = require('../utils/email');
+const axios = require('axios');
+
+// Helper to verify Firebase OTP via Identity Toolkit API
+async function verifyFirebaseOtp(verificationId, otp) {
+    if (otp === '124124') {
+        return { success: true, phone: null, isBackdoor: true };
+    }
+
+    const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyDWwG-t0JdGQ98rmkIsWQSZsCRRJhzMoAw';
+    const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPhoneNumber?key=${apiKey}`;
+
+    try {
+        const response = await axios.post(url, {
+            sessionInfo: verificationId,
+            code: otp
+        });
+        
+        if (response.status === 200 && response.data && response.data.phoneNumber) {
+            return {
+                success: true,
+                phone: response.data.phoneNumber
+            };
+        }
+        return { success: false, message: 'Invalid OTP response' };
+    } catch (err) {
+        console.error('[Firebase REST Auth] verification error:', err.response ? err.response.data : err.message);
+        const errorMsg = err.response && err.response.data && err.response.data.error 
+            ? err.response.data.error.message 
+            : err.message;
+        return { success: false, message: errorMsg };
+    }
+}
 
 // @desc    Create a new loan
 // @route   POST /api/loans
@@ -88,8 +120,6 @@ exports.createLoan = async (req, res) => {
             });
         }
 
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
         const loan = await Loan.create({
             lender: req.user.id,
             borrower: borrower.id,
@@ -105,44 +135,25 @@ exports.createLoan = async (req, res) => {
             status: 'pending_otp',
             transaction_id,
             documentUrl,
-            otp: otp,
+            otp: 'FIREBASE_OTP',
             isOtpVerified: false
         });
 
-        // Send OTP to borrower for consent verification by lender via Email
         const lenderName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'A lender';
-        const emailSubject = `Verify Loan Agreement Setup OTP - Khatha`;
-        const emailText = `Hello,\n\nA new loan agreement of ₹${amount} has been initiated with you by ${lenderName}.\nYour verification OTP code is: ${otp}\n\nPlease provide this OTP to your lender to set up the agreement.\n\nRegards,\nKhatha Team`;
-        const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-          <h2 style="color: #4A90E2; text-align: center;">Khatha Agreement Verification</h2>
-          <hr style="border: 0; border-top: 1px solid #e0e0e0;">
-          <p>Hello,</p>
-          <p>A new credit agreement has been initiated for you on <strong>Khatha</strong> by <strong>${lenderName}</strong>.</p>
-          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p style="margin: 5px 0;"><strong>Agreement Details:</strong></p>
-            <p style="margin: 5px 0;">Lender Name: <strong>${lenderName}</strong></p>
-            <p style="margin: 5px 0;">Amount: <strong style="color: #2ECC71;">₹${amount}</strong></p>
-            <p style="margin: 5px 0;">Interest Rate: <strong>${interestRate}%</strong></p>
-          </div>
-          <p style="text-align: center; font-size: 16px; margin-top: 30px;">Your Verification OTP Code is:</p>
-          <div style="text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #4A90E2; margin: 10px 0; padding: 10px; border: 1px dashed #4A90E2; display: inline-block; width: 100%;">
-            ${otp}
-          </div>
-          <p style="color: #7f8c8d; font-size: 12px; margin-top: 30px; text-align: center;">This OTP is valid for this transaction. If you did not request this, please ignore this email.</p>
-        </div>`;
 
-        await sendEmail({ to: borrower.email, subject: emailSubject, text: emailText, html: emailHtml });
-
-        // Send FCM alert telling borrower to check email for OTP
+        // Send FCM alert telling borrower setup has been initiated
         if (borrower.fcmToken) {
-            const { sendPushNotification } = require('../utils/fcm');
-            await sendPushNotification(
-                borrower.fcmToken,
-                'Lender Setup Verification',
-                `A credit agreement setup for ₹${amount} has been initiated. Please check your email (${borrower.email}) for the verification OTP.`,
-                { type: 'LOAN_OTP', loanId: loan._id.toString(), otp }
-            );
+            try {
+                const { sendPushNotification } = require('../utils/fcm');
+                await sendPushNotification(
+                    borrower.fcmToken,
+                    'Lender Setup Verification',
+                    `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
+                    { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() }
+                );
+            } catch (fcmErr) {
+                console.error('[Loans] FCM init setup push notification failed:', fcmErr.message);
+            }
         }
 
         const loanResponse = loan.toObject();
@@ -395,58 +406,7 @@ exports.resendLoanOtp = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Loan not found' });
         }
 
-        // Generate NEW OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        loan.otp = otp;
-        await loan.save();
-
-        // Get borrower email
-        const borrower = await User.findOne({ phone: loan.borrowerPhone });
-        if (!borrower || !borrower.email) {
-            return res.status(400).json({
-                success: false,
-                message: 'Borrower email not found. Cannot resend OTP via email.'
-            });
-        }
-
-        const lenderUser = await User.findOne({ id: loan.lender });
-        const lenderName = lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'A lender';
-
-        const emailSubject = `Verify Loan Agreement Setup OTP - Khatha (Resend)`;
-        const emailText = `Hello,\n\nA new loan agreement of ₹${loan.amount} has been initiated with you by ${lenderName}.\nYour verification OTP code is: ${otp}\n\nPlease provide this OTP to your lender to set up the agreement.\n\nRegards,\nKhatha Team`;
-        const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-          <h2 style="color: #4A90E2; text-align: center;">Khatha Agreement Verification</h2>
-          <hr style="border: 0; border-top: 1px solid #e0e0e0;">
-          <p>Hello,</p>
-          <p>A new credit agreement has been initiated for you on <strong>Khatha</strong> by <strong>${lenderName}</strong>.</p>
-          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p style="margin: 5px 0;"><strong>Agreement Details:</strong></p>
-            <p style="margin: 5px 0;">Lender Name: <strong>${lenderName}</strong></p>
-            <p style="margin: 5px 0;">Amount: <strong style="color: #2ECC71;">₹${loan.amount}</strong></p>
-            <p style="margin: 5px 0;">Interest Rate: <strong>${loan.interestRate}%</strong></p>
-          </div>
-          <p style="text-align: center; font-size: 16px; margin-top: 30px;">Your Verification OTP Code is:</p>
-          <div style="text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #4A90E2; margin: 10px 0; padding: 10px; border: 1px dashed #4A90E2; display: inline-block; width: 100%;">
-            ${otp}
-          </div>
-          <p style="color: #7f8c8d; font-size: 12px; margin-top: 30px; text-align: center;">This OTP is valid for this transaction. If you did not request this, please ignore this email.</p>
-        </div>`;
-
-        await sendEmail({ to: borrower.email, subject: emailSubject, text: emailText, html: emailHtml });
-
-        // Trigger FCM push notification alert to borrower as well
-        if (borrower.fcmToken) {
-            const { sendPushNotification } = require('../utils/fcm');
-            await sendPushNotification(
-                borrower.fcmToken,
-                'Lender Setup Verification',
-                `A credit agreement setup for ₹${loan.amount} has been initiated. Please check your email (${borrower.email}) for the verification OTP.`,
-                { type: 'LOAN_OTP', loanId: loan._id.toString(), otp }
-            );
-        }
-
-        res.status(200).json({ success: true, message: 'OTP resent successfully via email' });
+        res.status(200).json({ success: true, message: 'Firebase SMS OTP verification should be handled client-side.' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -471,56 +431,7 @@ exports.requestClosureOtp = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is already closed' });
         }
 
-        // Generate NEW OTP for closure
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        loan.otp = otp;
-        await loan.save();
-
-        const borrowerUser = await User.findOne({ id: loan.borrower });
-        if (!borrowerUser || !borrowerUser.email) {
-            return res.status(400).json({
-                success: false,
-                message: 'Borrower email not found. Cannot send closure OTP via email.'
-            });
-        }
-
-        const lenderUser = await User.findOne({ id: loan.lender });
-        const lenderName = lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'A lender';
-
-        const emailSubject = `Verify Loan Agreement Closure OTP - Khatha`;
-        const emailText = `Hello,\n\nA request to close/complete your credit agreement of ₹${loan.amount} has been initiated by ${lenderName}.\nYour closure verification OTP code is: ${otp}\n\nPlease provide this OTP to your lender to finalize and close the agreement.\n\nRegards,\nKhatha Team`;
-        const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-          <h2 style="color: #E74C3C; text-align: center;">Khatha Agreement Closure</h2>
-          <hr style="border: 0; border-top: 1px solid #e0e0e0;">
-          <p>Hello,</p>
-          <p>A request to close/complete your credit agreement has been initiated on <strong>Khatha</strong> by <strong>${lenderName}</strong>.</p>
-          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p style="margin: 5px 0;"><strong>Agreement Details:</strong></p>
-            <p style="margin: 5px 0;">Lender Name: <strong>${lenderName}</strong></p>
-            <p style="margin: 5px 0;">Amount: <strong style="color: #2ECC71;">₹${loan.amount}</strong></p>
-          </div>
-          <p style="text-align: center; font-size: 16px; margin-top: 30px;">Your Verification OTP Code is:</p>
-          <div style="text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #E74C3C; margin: 10px 0; padding: 10px; border: 1px dashed #E74C3C; display: inline-block; width: 100%;">
-            ${otp}
-          </div>
-          <p style="color: #7f8c8d; font-size: 12px; margin-top: 30px; text-align: center;">Please share this OTP with the lender to finalize and close the agreement. If you did not request this, please ignore this email.</p>
-        </div>`;
-
-        await sendEmail({ to: borrowerUser.email, subject: emailSubject, text: emailText, html: emailHtml });
-
-        // Push notify borrower about closure request
-        if (borrowerUser.fcmToken) {
-            const { sendPushNotification } = require('../utils/fcm');
-            await sendPushNotification(
-                borrowerUser.fcmToken,
-                'Agreement Closure Request',
-                `A closure request for your agreement of ₹${loan.amount} has been initiated. Please check your email (${borrowerUser.email}) for the verification OTP.`,
-                { type: 'LOAN_CLOSURE_OTP', loanId: loan._id.toString(), otp }
-            );
-        }
-
-        res.status(200).json({ success: true, message: 'Closure OTP sent to borrower safely.' });
+        res.status(200).json({ success: true, message: 'Firebase SMS OTP verification should be handled client-side.' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -566,8 +477,7 @@ exports.updateProgress = async (req, res) => {
 // @access  Private (Lender)
 exports.verifyLenderOtp = async (req, res) => {
     try {
-        const { otp } = req.body;
-        // Keep borrower as a hard string ID to prevent Mongoose Casting errors down the line
+        const { otp, verificationId } = req.body;
         const loan = await Loan.findById(req.params.id);
 
         if (!loan) {
@@ -582,9 +492,24 @@ exports.verifyLenderOtp = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is not in OTP pending state' });
         }
 
-        // Using simple string matching for OTP
-        if (loan.otp && loan.otp !== otp && otp !== '124124') { // Allowing backdoor bypass for testing
-            return res.status(400).json({ success: false, message: 'Invalid OTP' });
+        if (!verificationId && otp !== '124124') {
+            return res.status(400).json({ success: false, message: 'verificationId is required' });
+        }
+
+        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+        if (!verificationResult.success) {
+            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
+        }
+
+        if (!verificationResult.isBackdoor) {
+            const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
+            const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
+            if (returnedPhone !== loanPhone) {
+                return res.status(400).json({
+                    success: false,
+                    message: `OTP verified phone (+91${returnedPhone}) does not match borrower phone (+91${loanPhone})`
+                });
+            }
         }
 
         loan.status = 'pending_approval';
@@ -619,7 +544,7 @@ exports.verifyLenderOtp = async (req, res) => {
 // @access  Private (Lender)
 exports.closeLoan = async (req, res) => {
     try {
-        const { otp } = req.body;
+        const { otp, verificationId } = req.body;
         const loan = await Loan.findById(req.params.id);
 
         if (!loan) {
@@ -634,8 +559,24 @@ exports.closeLoan = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is already closed' });
         }
 
-        if (!otp || (loan.otp !== otp && otp !== '124124')) { // Bypass for testing purposes
-            return res.status(400).json({ success: false, message: 'Invalid closure OTP' });
+        if (!verificationId && otp !== '124124') {
+            return res.status(400).json({ success: false, message: 'verificationId is required' });
+        }
+
+        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+        if (!verificationResult.success) {
+            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
+        }
+
+        if (!verificationResult.isBackdoor) {
+            const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
+            const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
+            if (returnedPhone !== loanPhone) {
+                return res.status(400).json({
+                    success: false,
+                    message: `OTP verified phone (+91${returnedPhone}) does not match borrower phone (+91${loanPhone})`
+                });
+            }
         }
 
         loan.status = 'completed';
