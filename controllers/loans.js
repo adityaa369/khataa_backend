@@ -143,17 +143,15 @@ exports.createLoan = async (req, res) => {
 
         // Send FCM alert telling borrower setup has been initiated
         if (borrower.fcmToken) {
-            try {
-                const { sendPushNotification } = require('../utils/fcm');
-                await sendPushNotification(
-                    borrower.fcmToken,
-                    'Lender Setup Verification',
-                    `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
-                    { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() }
-                );
-            } catch (fcmErr) {
+            const { sendPushNotification } = require('../utils/fcm');
+            sendPushNotification(
+                borrower.fcmToken,
+                'Lender Setup Verification',
+                `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
+                { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() }
+            ).catch(fcmErr => {
                 console.error('[Loans] FCM init setup push notification failed:', fcmErr.message);
-            }
+            });
         }
 
         const loanResponse = loan.toObject();
@@ -369,21 +367,21 @@ exports.verifyLoan = async (req, res) => {
 
         const lenderUser = await User.findOne({ id: loan.lender });
         if (lenderUser && lenderUser.fcmToken) {
-            await sendPushNotification(
+            sendPushNotification(
                 lenderUser.fcmToken,
                 'Agreement Accepted',
                 `${req.user.firstName || 'A borrower'} has signed and accepted your loan agreement for ₹${loan.amount}.`,
                 { type: 'LOAN_VERIFIED', loanId: loan._id.toString() }
-            );
+            ).catch(err => console.error('[Loans] FCM Lender verify notification failed:', err.message));
         }
 
         if (req.user && req.user.fcmToken) {
-            await sendPushNotification(
+            sendPushNotification(
                 req.user.fcmToken,
                 'Agreement Activated',
                 `Your loan agreement for ₹${loan.amount} is now active and on track.`,
                 { type: 'LOAN_VERIFIED', loanId: loan._id.toString() }
-            );
+            ).catch(err => console.error('[Loans] FCM Borrower verify notification failed:', err.message));
         }
         
         console.log('--- END DEBUG ---\n');
@@ -520,12 +518,12 @@ exports.verifyLenderOtp = async (req, res) => {
         const borrowerUser = await User.findOne({ id: loan.borrower });
         if (borrowerUser && borrowerUser.fcmToken) {
             const { sendPushNotification } = require('../utils/fcm');
-            await sendPushNotification(
+            sendPushNotification(
                 borrowerUser.fcmToken,
                 'New Agreement Request',
                 `${req.user.firstName || 'Someone'} has confirmed sending you a loan out for ₹${loan.amount}. Tap to review and accept via Digital Signature.`,
                 { type: 'LOAN_CREATED', loanId: loan._id.toString() }
-            );
+            ).catch(err => console.error('[Loans] FCM verifyLenderOtp notification failed:', err.message));
         }
 
         res.status(200).json({
@@ -597,29 +595,25 @@ exports.closeLoan = async (req, res) => {
 
         await loan.save();
 
-        try {
-            const { sendPushNotification } = require('../utils/fcm');
-            
-            if (req.user && req.user.fcmToken) {
-                await sendPushNotification(
-                    req.user.fcmToken,
-                    'Agreement Closed',
-                    `The loan agreement for ₹${loan.amount} has been successfully closed.`,
-                    { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
-                );
-            }
+        const { sendPushNotification } = require('../utils/fcm');
+        
+        if (req.user && req.user.fcmToken) {
+            sendPushNotification(
+                req.user.fcmToken,
+                'Agreement Closed',
+                `The loan agreement for ₹${loan.amount} has been successfully closed.`,
+                { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
+            ).catch(err => console.error('[Loans] FCM Lender close notification failed:', err.message));
+        }
 
-            const borrowerUser = await User.findOne({ id: loan.borrower });
-            if (borrowerUser && borrowerUser.fcmToken) {
-                await sendPushNotification(
-                    borrowerUser.fcmToken,
-                    'Agreement Closed',
-                    `Your loan agreement for ₹${loan.amount} has been successfully closed.`,
-                    { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
-                );
-            }
-        } catch (fcmErr) {
-            console.error('[Loans] FCM closure notification failed:', fcmErr.message);
+        const borrowerUser = await User.findOne({ id: loan.borrower });
+        if (borrowerUser && borrowerUser.fcmToken) {
+            sendPushNotification(
+                borrowerUser.fcmToken,
+                'Agreement Closed',
+                `Your loan agreement for ₹${loan.amount} has been successfully closed.`,
+                { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
+            ).catch(err => console.error('[Loans] FCM Borrower close notification failed:', err.message));
         }
 
         res.status(200).json({ success: true, message: 'Loan successfully closed.', loan });
