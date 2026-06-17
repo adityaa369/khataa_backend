@@ -8,7 +8,8 @@ const {
     updateProgress,
     verifyLenderOtp,
     requestClosureOtp,
-    closeLoan
+    closeLoan,
+    uploadDocument
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
 
@@ -19,6 +20,7 @@ router.use(protect); // All loan routes are protected
 router.post('/', createLoan);
 router.get('/given', getGivenLoans);
 router.get('/taken', getTakenLoans);
+router.post('/upload-document', uploadDocument);
 router.post('/:id/verify', verifyLoan);
 router.post('/:id/verify-lender-otp', verifyLenderOtp);
 router.post('/:id/resend-otp', resendLoanOtp);

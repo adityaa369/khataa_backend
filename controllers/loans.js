@@ -238,8 +238,10 @@ exports.getTakenLoans = async (req, res) => {
             const loanObj = loan.toObject ? loan.toObject() : loan;
             if (lenderUser) {
                 loanObj.lenderName = `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() || 'Unknown Lender';
+                loanObj.lenderPhone = lenderUser.phone || '';
             } else {
                 loanObj.lenderName = 'Unknown Lender';
+                loanObj.lenderPhone = '';
             }
             loansWithLender.push(loanObj);
         }
@@ -620,5 +622,62 @@ exports.closeLoan = async (req, res) => {
     } catch (err) {
         console.error('[Loans] closeLoan Error:', err.message);
         res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+exports.uploadDocument = async (req, res) => {
+    try {
+        const { fileName, fileType, base64Data } = req.body;
+        if (!base64Data) {
+            return res.status(400).json({ success: false, message: 'No base64Data provided' });
+        }
+
+        const buffer = Buffer.from(base64Data, 'base64');
+        const filename = `uploads/${Date.now()}_${fileName || 'document.jpg'}`;
+
+        const admin = require('../config/firebase');
+        const path = require('path');
+        const fs = require('fs');
+
+        // Attempt uploading to Firebase Storage first
+        try {
+            const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
+            const bucket = admin.storage().bucket(bucketName);
+            const file = bucket.file(filename);
+
+            await file.save(buffer, {
+                metadata: {
+                    contentType: fileType || 'image/jpeg',
+                },
+                public: true
+            });
+            await file.makePublic();
+            const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filename}`;
+            console.log(`[Upload] Uploaded successfully to Firebase: ${publicUrl}`);
+            return res.status(200).json({ success: true, url: publicUrl });
+        } catch (firebaseError) {
+            console.error('[Upload] Firebase upload failed (billing delinquent or config issue):', firebaseError.message);
+            
+            // Fallback to local storage
+            const uploadsDir = path.join(__dirname, '..', 'uploads');
+            if (!fs.existsSync(uploadsDir)) {
+                fs.mkdirSync(uploadsDir, { recursive: true });
+            }
+
+            const localFilename = `${Date.now()}_${fileName || 'document.jpg'}`;
+            const localPath = path.join(uploadsDir, localFilename);
+            fs.writeFileSync(localPath, buffer);
+
+            // Determine server URL prefix
+            const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+            const host = req.get('host');
+            const localUrl = `${protocol}://${host}/uploads/${localFilename}`;
+            console.log(`[Upload] Fallback: saved locally at ${localUrl}`);
+
+            return res.status(200).json({ success: true, url: localUrl });
+        }
+    } catch (err) {
+        console.error('[Upload] Controller Error:', err.message);
+        return res.status(500).json({ success: false, message: err.message });
     }
 };
