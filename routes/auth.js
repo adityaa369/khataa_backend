@@ -11,7 +11,6 @@ router.post('/send-otp', (req, res) => {
 });
 
 router.post('/verify-otp', authController.verifyOtp);
-router.post('/verify-token', authController.verifyToken); // Keep for legacy if needed
 router.post('/login-password', authController.loginPassword);
 router.post('/send-otp-msg91', authController.sendOtpMsg91);
 router.post('/verify-otp-msg91', authController.verifyOtpMsg91);
