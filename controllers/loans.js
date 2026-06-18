@@ -53,7 +53,9 @@ exports.createLoan = async (req, res) => {
             duration_type,
             type,
             transaction_id,
-            documentUrl
+            documentUrl,
+            borrower_email,
+            borrower_pan
         } = req.body;
 
         // Sanitize phone: strip 91 or +91
@@ -100,6 +102,20 @@ exports.createLoan = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Borrower does not have a registered email address. Please ask them to update their profile first.'
+            });
+        }
+
+        // Strict identity check if email/pan is provided
+        if (borrower_email && borrower.email && borrower.email.toLowerCase() !== borrower_email.toLowerCase()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Borrower email does not match registered user details.'
+            });
+        }
+        if (borrower_pan && borrower.pan && borrower.pan.toUpperCase() !== borrower_pan.toUpperCase()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Borrower PAN does not match registered user details.'
             });
         }
 
