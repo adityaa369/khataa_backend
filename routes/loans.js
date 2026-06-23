@@ -4,6 +4,9 @@ const {
     getGivenLoans,
     getTakenLoans,
     verifyLoan,
+    verifyLenderOtp,
+    requestClosureOtp,
+    closeLoan,
     resendLoanOtp,
     updateProgress,
     uploadDocument,
@@ -22,6 +25,9 @@ router.get('/given', getGivenLoans);
 router.get('/taken', getTakenLoans);
 router.post('/upload-document', uploadDocument);
 router.post('/:id/verify', verifyLoan);
+router.post('/:id/verify-lender-otp', verifyLenderOtp);
+router.post('/:id/close-otp', requestClosureOtp);
+router.post('/:id/close', closeLoan);
 router.post('/:id/resend-otp', resendLoanOtp);
 router.patch('/:id/progress', updateProgress);
 
