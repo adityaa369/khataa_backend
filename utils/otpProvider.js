@@ -1,5 +1,4 @@
 const admin = require('../config/firebase');
-const axios = require('axios');
 
 /**
  * Verify Firebase ID Token
@@ -34,45 +33,17 @@ const verifyFirebaseToken = async (idToken) => {
 };
 
 /**
- * Send custom OTP (Loan Consent) via MSG91
- * Firebase cannot send arbitrary SMS to other phones from the backend.
- * This function uses MSG91 specifically for borrower consent verification.
+ * Mock sendOtp fallback
+ * Firebase Phone Auth cannot be triggered from the backend to send custom SMS.
+ * To prevent the app from crashing while MSG91 is removed, this mock returns true.
  */
 const sendOtp = async (phone, otp) => {
-    try {
-        const authKey = process.env.MSG91_AUTH_KEY;
-        const templateId = process.env.MSG91_TEMPLATE_ID;
-
-        if (!authKey || !templateId) {
-             console.error('[MSG91] Missing credentials in environment variables.');
-             return { success: false, message: 'Server missing SMS configuration' };
-        }
-
-        let mobile = phone.toString();
-        // Ensure format is 91xxxxxxxxxx for MSG91
-        if (mobile.startsWith('+')) {
-            mobile = mobile.substring(1);
-        } else if (!mobile.startsWith('91') && mobile.length === 10) {
-            mobile = `91${mobile}`;
-        }
-
-        const url = `https://control.msg91.com/api/v5/otp?template_id=${templateId}&mobile=${mobile}&authkey=${authKey}`;
-        
-        console.log(`[MSG91] Requesting SMS to ${mobile} via MSG91...`);
-        const response = await axios.post(url, { otp: otp }, {
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (response.data && response.data.type === 'success') {
-             return { success: true, message: 'OTP sent successfully' };
-        } else {
-             console.error('[MSG91] API Response Error:', response.data);
-             return { success: false, message: response.data.message || 'Failed to send SMS' };
-        }
-    } catch (error) {
-        console.error('[MSG91] Network Error:', error.message);
-        return { success: false, message: error.message };
-    }
+    console.log(`\n=========================================`);
+    console.log(`[MOCK SMS] Firebase cannot send custom backend OTPs.`);
+    console.log(`[MOCK SMS] Please read the real OTP below to test the UI:`);
+    console.log(`[MOCK SMS] OTP for ${phone} is: ${otp}`);
+    console.log(`=========================================\n`);
+    return { success: true };
 };
 
 module.exports = { verifyFirebaseToken, sendOtp };

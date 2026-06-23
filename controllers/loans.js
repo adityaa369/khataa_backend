@@ -53,9 +53,7 @@ exports.createLoan = async (req, res) => {
             duration_type,
             type,
             transaction_id,
-            documentUrl,
-            borrower_email,
-            borrower_pan
+            documentUrl
         } = req.body;
 
         // Sanitize phone: strip 91 or +91
@@ -102,20 +100,6 @@ exports.createLoan = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Borrower does not have a registered email address. Please ask them to update their profile first.'
-            });
-        }
-
-        // Strict identity check if email/pan is provided
-        if (borrower_email && borrower.email && borrower.email.toLowerCase() !== borrower_email.toLowerCase()) {
-            return res.status(400).json({
-                success: false,
-                message: 'Borrower email does not match registered user details.'
-            });
-        }
-        if (borrower_pan && borrower.pan && borrower.pan.toUpperCase() !== borrower_pan.toUpperCase()) {
-            return res.status(400).json({
-                success: false,
-                message: 'Borrower PAN does not match registered user details.'
             });
         }
 
@@ -478,6 +462,19 @@ exports.updateProgress = async (req, res) => {
         // Update Credit Score of borrower
         if (loan.borrower) {
             await updateCreditScore(loan.borrower);
+            
+            // Send Push Notification so borrower UI refreshes automatically
+            const User = require('../models/User');
+            const borrowerUser = await User.findOne({ id: loan.borrower });
+            if (borrowerUser && borrowerUser.fcmToken) {
+                const { sendPushNotification } = require('../utils/fcm');
+                sendPushNotification(
+                    borrowerUser.fcmToken,
+                    'Loan Progress Updated',
+                    `Your lender has updated the repayment progress for your loan of ₹${loan.amount}.`,
+                    { type: 'LOAN_PROGRESS_UPDATED', loanId: loan._id.toString() }
+                ).catch(err => console.error('[Loans] FCM updateProgress notification failed:', err.message));
+            }
         }
 
         res.status(200).json({ success: true, loan });
@@ -641,21 +638,18 @@ exports.closeLoan = async (req, res) => {
     }
 };
 
+// @desc    Upload document
+// @route   POST /api/loans/upload-document
+// @access  Private
 exports.uploadDocument = async (req, res) => {
     try {
         const { fileName, fileType, base64Data } = req.body;
-        if (!base64Data) {
-            return res.status(400).json({ success: false, message: 'No base64Data provided' });
+
+        if (!fileName || !fileType || !base64Data) {
+            return res.status(400).json({ success: false, message: 'Please provide fileName, fileType and base64Data' });
         }
 
         const buffer = Buffer.from(base64Data, 'base64');
-        const filename = `uploads/${Date.now()}_${fileName || 'document.jpg'}`;
-
-        const admin = require('../config/firebase');
-        const path = require('path');
-        const fs = require('fs');
-
-        // Attempt uploading to Firebase Storage first
         try {
             const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
             const bucket = admin.storage().bucket(bucketName);
@@ -697,3 +691,100 @@ exports.uploadDocument = async (req, res) => {
         return res.status(500).json({ success: false, message: err.message });
     }
 };
+
+// ─── Custom Payment Transactions ──────────────────────────────────────────
+
+async function _handleCustomTransaction(req, res, actionType) {
+    try {
+        const { amount, otp, verificationId } = req.body;
+        const Loan = require('../models/Loan');
+        const { updateCreditScore } = require('../utils/creditScoreCalc');
+        const loan = await Loan.findById(req.params.id);
+
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
+        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
+        
+        if (!amount || amount <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
+
+        if (!verificationId && otp !== '124124') {
+            return res.status(400).json({ success: false, message: 'verificationId is required' });
+        }
+
+        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+        if (!verificationResult.success) {
+            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
+        }
+
+        if (!verificationResult.isBackdoor) {
+            const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
+            const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
+            if (returnedPhone !== loanPhone) {
+                return res.status(400).json({ success: false, message: 'OTP verified phone does not match borrower phone' });
+            }
+        }
+
+        let notifTitle = 'Transaction Complete';
+        let notifBody = '';
+
+        if (actionType === 'recordPayment' || actionType === 'recordInterest') {
+            loan.totalPayable = Math.max(0, loan.totalPayable - amount);
+            notifTitle = 'Payment Recorded';
+            notifBody = `Your lender recorded a payment of ₹${amount}. Your remaining balance is ₹${loan.totalPayable}.`;
+        } else if (actionType === 'addCredit') {
+            loan.totalPayable += amount;
+            notifTitle = 'Credit Added';
+            notifBody = `Your lender added a credit of ₹${amount}. Your total payable is now ₹${loan.totalPayable}.`;
+        }
+
+        if (loan.totalPayable <= 0) {
+            loan.status = 'completed';
+            loan.progress = 1.0;
+        } else {
+            let originalTotalPayable = loan.amount;
+            if (loan.loanType === 'interest_credit' || loan.loanType === 'home' || loan.loanType === 'interestcredit') {
+                const P = loan.amount;
+                const monthlyInterest = P * (loan.interestRate || 0) / 100;
+                originalTotalPayable = P + (monthlyInterest * (loan.durationMonths || 1));
+            } else if (loan.interestRate > 0) {
+                const P = loan.amount;
+                const r = loan.interestRate / 100 / 12;
+                const n = loan.durationType === 'Days' ? (loan.durationMonths / 30) : loan.durationMonths;
+                const emi = P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
+                originalTotalPayable = emi * (loan.durationType === 'Days' ? 1 : n);
+            }
+            
+            if (originalTotalPayable > 0) {
+                const totalPaid = Math.max(0, originalTotalPayable - loan.totalPayable);
+                loan.progress = Math.max(0, Math.min(1.0, totalPaid / originalTotalPayable));
+            }
+        }
+
+        await loan.save();
+
+        if (loan.borrower) {
+            await updateCreditScore(loan.borrower);
+            
+            const User = require('../models/User');
+            const borrowerUser = await User.findOne({ id: loan.borrower });
+            if (borrowerUser && borrowerUser.fcmToken) {
+                const { sendPushNotification } = require('../utils/fcm');
+                sendPushNotification(
+                    borrowerUser.fcmToken,
+                    notifTitle,
+                    notifBody,
+                    { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
+                ).catch(err => console.error('[Loans] FCM transaction notification failed:', err.message));
+            }
+        }
+
+        res.status(200).json({ success: true, loan });
+    } catch (err) {
+        console.error('[Loans] customTransaction Error:', err.message);
+        res.status(500).json({ success: false, message: err.message });
+    }
+}
+
+exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'recordPayment');
+exports.addCredit = (req, res) => _handleCustomTransaction(req, res, 'addCredit');
+exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');

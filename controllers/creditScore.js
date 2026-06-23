@@ -1,6 +1,5 @@
 const CreditScore = require('../models/CreditScore');
 const Loan = require('../models/Loan');
-const { updateCreditScore } = require('../utils/creditScoreCalc');
 
 // @desc    Get user credit score (with lazy update)
 // @route   GET /api/credit-score
@@ -8,7 +7,6 @@ const { updateCreditScore } = require('../utils/creditScoreCalc');
 exports.getCreditScore = async (req, res) => {
     try {
         await checkOverdueLoans(req.user.id);
-        await updateCreditScore(req.user.id);
         const score = await CreditScore.findOne({ user: req.user.id });
         res.status(200).json({ success: true, score });
     } catch (err) {

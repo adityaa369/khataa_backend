@@ -9,56 +9,6 @@ const compression = require('compression');
 dotenv.config();
 
 const app = express();
-const admin = require('firebase-admin');
-const fs = require('fs');
-const path = require('path');
-
-// Helper to safely parse stringified Firebase service account, handling missing outer braces
-const parseServiceAccount = (rawEnv) => {
-    if (!rawEnv) return null;
-    let jsonStr = rawEnv.trim();
-    if (!jsonStr.startsWith('{')) {
-        jsonStr = '{' + jsonStr;
-    }
-    if (!jsonStr.endsWith('}')) {
-        jsonStr = jsonStr + '}';
-    }
-    return JSON.parse(jsonStr);
-};
-
-// Initialize Firebase Admin
-try {
-    if (!admin.apps.length) {
-        const serviceAccountPath = path.join(__dirname, 'service-account.json');
-        if (fs.existsSync(serviceAccountPath)) {
-            const serviceAccount = require(serviceAccountPath);
-            admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount)
-            });
-            console.log('[Firebase] Admin SDK initialized via service-account.json (Local)');
-        } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-            const serviceAccount = parseServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT);
-            admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount)
-            });
-            console.log('[Firebase] Admin SDK initialized via FIREBASE_SERVICE_ACCOUNT JSON (Production)');
-        } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-            admin.initializeApp({
-                credential: admin.credential.cert({
-                    projectId: process.env.FIREBASE_PROJECT_ID,
-                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                    // Replace escaped literal \n within the .env string to actual newline characters
-                    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-                })
-            });
-            console.log('[Firebase] Admin SDK initialized via Environment Variables (Production)');
-        } else {
-            console.warn('⚠️ [Firebase] Credentials not found. Push notifications will fail.');
-        }
-    }
-} catch (error) {
-    console.error('⚠️ [Firebase] Failed to initialize Admin SDK:', error.message);
-}
 
 // Middlewares
 app.use(cors());
@@ -66,6 +16,8 @@ app.use(compression());
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
+const path = require('path');
+const fs = require('fs');
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
@@ -94,34 +46,47 @@ const authRoutes = require('./routes/auth');
 const loanRoutes = require('./routes/loans');
 const creditScoreRoutes = require('./routes/creditScore');
 const userRoutes = require('./routes/users');
-const chitFundRoutes = require('./routes/chitFunds');
 
 // Mount Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/loans', loanRoutes);
 app.use('/api/credit-score', creditScoreRoutes);
 app.use('/api/users', userRoutes);
-app.use('/api/chits', chitFundRoutes);
 
 // Test Route
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 
+// Global Error Handler
+app.use((err, req, res, next) => {
+    console.error(`[GLOBAL ERROR] ${req.method} ${req.url}:`, err.message);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+});
+
 // Server Config
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGODB_URI;
 
 // DB Connection & Start Server
+const http = require('http');
+const initAuctionEngine = require('./sockets/auctionEngine');
+
 mongoose.connect(MONGO_URI)
     .then(() => {
         console.log('\n--- MongoDB Connection ---');
         console.log('SUCCESS: Connected to MongoDB Atlas Cluster');
         console.log('------------------------\n');
 
-        app.listen(PORT, '0.0.0.0', () => {
+        const server = http.createServer(app);
+        
+        // Initialize WebSockets for Live Auctions
+        initAuctionEngine(server);
+
+        server.listen(PORT, '0.0.0.0', () => {
             console.log(`\n--- Khaata Server Live ---`);
             console.log(`Port: ${PORT}`);
             console.log(`Mode: Development`);
             console.log(`Local IP: http://localhost:${PORT}`);
+            console.log(`WebSockets: Attached & Running`);
             console.log(`-------------------------\n`);
         });
     })

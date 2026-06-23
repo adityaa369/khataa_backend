@@ -6,10 +6,10 @@ const {
     verifyLoan,
     resendLoanOtp,
     updateProgress,
-    verifyLenderOtp,
-    requestClosureOtp,
-    closeLoan,
-    uploadDocument
+    uploadDocument,
+    recordPayment,
+    addCredit,
+    recordInterest
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
 
@@ -22,10 +22,12 @@ router.get('/given', getGivenLoans);
 router.get('/taken', getTakenLoans);
 router.post('/upload-document', uploadDocument);
 router.post('/:id/verify', verifyLoan);
-router.post('/:id/verify-lender-otp', verifyLenderOtp);
 router.post('/:id/resend-otp', resendLoanOtp);
 router.patch('/:id/progress', updateProgress);
-router.post('/:id/close-otp', requestClosureOtp);
-router.post('/:id/close', closeLoan);
+
+// Custom Payments
+router.post('/:id/record-payment', recordPayment);
+router.post('/:id/add-credit', addCredit);
+router.post('/:id/record-interest', recordInterest);
 
 module.exports = router;

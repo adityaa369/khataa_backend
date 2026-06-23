@@ -15,7 +15,6 @@ router.post('/login-password', authController.loginPassword);
 router.post('/send-otp-msg91', authController.sendOtpMsg91);
 router.post('/verify-otp-msg91', authController.verifyOtpMsg91);
 router.post('/register', protect, authController.register);
-router.post('/reset-password', protect, authController.resetPassword);
 router.get('/me', protect, authController.getMe);
 
 module.exports = router;

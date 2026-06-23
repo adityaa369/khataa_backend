@@ -21,20 +21,15 @@ const UserSchema = new mongoose.Schema({
     },
     email: {
         type: String,
-        sparse: true,
-        unique: true
-    },
-    pan: {
-        type: String,
-        sparse: true,
-        unique: true
-    },
-    password: {
-        type: String,
-        select: false // don't return password by default
+        sparse: true
     },
     city: String,
     address: String,
+    password: {
+        type: String,
+        required: false
+    },
+    pan: String,
     aadhar: String,
     dob: String,
     gender: String,

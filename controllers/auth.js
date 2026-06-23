@@ -91,7 +91,7 @@ exports.verifyOtp = async (req, res) => {
 // @route   POST /api/auth/register
 // @access  Private
 exports.register = async (req, res) => {
-    const allowedFields = ['firstName', 'lastName', 'email', 'pan', 'aadhar', 'dob', 'gender', 'city', 'password'];
+    const allowedFields = ['firstName', 'lastName', 'email', 'pan', 'aadhar', 'dob', 'gender', 'city'];
     const updates = {};
 
     allowedFields.forEach(field => {
@@ -101,9 +101,9 @@ exports.register = async (req, res) => {
     });
 
     try {
-        if (updates.password) {
+        if (req.body.password) {
             const salt = await bcrypt.genSalt(10);
-            updates.password = await bcrypt.hash(updates.password, salt);
+            updates.password = await bcrypt.hash(req.body.password, salt);
         }
 
         const user = await User.findOneAndUpdate(
@@ -117,11 +117,6 @@ exports.register = async (req, res) => {
             user
         });
     } catch (err) {
-        if (err.code === 11000) {
-            let field = Object.keys(err.keyValue)[0];
-            let message = `${field.toUpperCase()} is already registered to another account.`;
-            return res.status(400).json({ success: false, message });
-        }
         res.status(500).json({
             success: false,
             message: err.message
@@ -325,82 +320,5 @@ exports.verifyOtpMsg91 = async (req, res) => {
             success: false,
             message: err.message
         });
-    }
-};
-
-// @desc    Login via Password
-// @route   POST /api/auth/login-password
-// @access  Public
-exports.loginPassword = async (req, res) => {
-    const { phone, password } = req.body;
-
-    if (!phone || !password) {
-        return res.status(400).json({ success: false, message: 'Please provide phone and password' });
-    }
-
-    let phoneStr = phone.replace(/\D/g, '');
-    if (phoneStr.startsWith('91') && phoneStr.length > 10) {
-        phoneStr = phoneStr.replace(/^91/, '');
-    }
-
-    const user = await User.findOne({ phone: phoneStr }).select('+password');
-    if (!user) {
-        return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
-
-    if (!user.password) {
-        return res.status(401).json({ success: false, message: 'Password not set. Please login via OTP and set a password in your profile.' });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-        return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
-
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-        expiresIn: '30d'
-    });
-
-    // Remove password from output
-    user.password = undefined;
-
-    res.status(200).json({
-        success: true,
-        token,
-        isNewUser: !user.firstName,
-        user
-    });
-};
-
-// @desc    Reset Password (via OTP Token)
-// @route   POST /api/auth/reset-password
-// @access  Private
-exports.resetPassword = async (req, res) => {
-    // The user must be authenticated via Firebase OTP token first, 
-    // which gives them a standard JWT token, or we accept the JWT in header 
-    // and just let them update their password like a normal update.
-    // However, if they forgot password, they login via OTP, then they are authenticated!
-    // So this just needs to take a new password.
-    
-    const { password } = req.body;
-    if (!password) {
-        return res.status(400).json({ success: false, message: 'Please provide a new password' });
-    }
-
-    try {
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-
-        await User.findOneAndUpdate(
-            { id: req.user.id },
-            { $set: { password: hashedPassword } }
-        );
-
-        res.status(200).json({
-            success: true,
-            message: 'Password reset successfully'
-        });
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
     }
 };
