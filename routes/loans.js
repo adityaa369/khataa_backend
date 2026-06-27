@@ -15,14 +15,15 @@ const {
     recordInterest
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
+const { cacheMiddleware } = require('../middleware/cache');
 
 const router = express.Router();
 
 router.use(protect); // All loan routes are protected
 
 router.post('/', createLoan);
-router.get('/given', getGivenLoans);
-router.get('/taken', getTakenLoans);
+router.get('/given', cacheMiddleware('given_loans', 300), getGivenLoans);
+router.get('/taken', cacheMiddleware('taken_loans', 300), getTakenLoans);
 router.post('/upload-document', uploadDocument);
 router.post('/:id/verify', verifyLoan);
 router.post('/:id/verify-lender-otp', verifyLenderOtp);
