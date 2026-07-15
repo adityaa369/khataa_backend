@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const Notification = require('../models/Notification');
-const auth = require('../middleware/auth');
+const { protect } = require('../middleware/auth');
 
 // Get user notifications
-router.get('/', auth, async (req, res) => {
+router.get('/', protect, async (req, res) => {
   try {
     const notifications = await Notification.find({ userId: req.user.id })
       .sort({ createdAt: -1 })
@@ -17,7 +17,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // Mark notification as read
-router.put('/:id/read', auth, async (req, res) => {
+router.put('/:id/read', protect, async (req, res) => {
   try {
     const notification = await Notification.findOneAndUpdate(
       { _id: req.params.id, userId: req.user.id },
