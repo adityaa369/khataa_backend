@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: khatha-backend
+    env: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 18.16.0
+      - key: PORT
+        value: 10000
+      - fromGroup: khatha-secrets
