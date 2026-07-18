@@ -181,8 +181,22 @@ exports.getGivenLoans = async (req, res) => {
     try {
         const loans = await Loan.find({ lender: req.user.id });
         const loansMapped = [];
+        const User = require('../models/User'); // Import User model
         for (const loan of loans) {
-            loansMapped.push(loan.toObject ? loan.toObject() : loan);
+            const loanObj = loan.toObject ? loan.toObject() : loan;
+            
+            // Dynamically fetch borrower name if registered
+            if (loanObj.borrower) {
+                const borrowerUser = await User.findOne({ id: loanObj.borrower });
+                if (borrowerUser) {
+                    const realName = `${borrowerUser.firstName || ''} ${borrowerUser.lastName || ''}`.trim();
+                    if (realName) {
+                        loanObj.borrowerName = realName;
+                    }
+                }
+            }
+            
+            loansMapped.push(loanObj);
         }
         
         // --- CHIT FUNDS AGGREGATION ---
