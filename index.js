@@ -60,6 +60,19 @@ app.use('/api/chitfunds', chitFundRoutes);
 // Test Route
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 
+// Dev Route to Clear DB
+app.post('/api/dev/clear-db', async (req, res) => {
+    try {
+        const collections = mongoose.connection.collections;
+        for (const key in collections) {
+            await collections[key].deleteMany();
+        }
+        res.json({ success: true, message: 'Database completely cleared for testing.' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 // Global Error Handler
 app.use((err, req, res, next) => {
     console.error(`[GLOBAL ERROR] ${req.method} ${req.url}:`, err.message);
