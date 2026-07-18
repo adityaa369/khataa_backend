@@ -61,7 +61,7 @@ app.use('/api/chitfunds', chitFundRoutes);
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 
 // Dev Route to Clear DB
-app.post('/api/dev/clear-db', async (req, res) => {
+app.get('/api/dev/clear-db', async (req, res) => {
     try {
         const collections = mongoose.connection.collections;
         for (const key in collections) {
