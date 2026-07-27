@@ -1,36 +1,36 @@
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-const User = require('./models/User');
-const Loan = require('./models/Loan');
-const CreditScore = require('./models/CreditScore');
 
 dotenv.config();
 
 const MONGO_URI = process.env.MONGODB_URI;
 
-async function clearDB() {
+if (!MONGO_URI) {
+    console.error("No MONGODB_URI found in .env");
+    process.exit(1);
+}
+
+const clearDB = async () => {
     try {
-        console.log('Connecting to DB for cleanup...');
+        console.log("Connecting to MongoDB...");
         await mongoose.connect(MONGO_URI);
-        console.log('Connected!');
+        console.log("Connected to MongoDB Atlas.");
 
-        console.log('Clearing Users...');
-        await User.deleteMany({});
+        const collections = mongoose.connection.collections;
+        
+        console.log("Clearing all collections...");
+        for (const key in collections) {
+            const collection = collections[key];
+            await collection.deleteMany();
+            console.log(`Cleared ${collection.name}`);
+        }
 
-        console.log('Clearing Loans...');
-        await Loan.deleteMany({});
-
-        console.log('Clearing Credit Scores...');
-        await CreditScore.deleteMany({});
-
-        console.log('\n--- Database Cleared Successfully! ---');
-        console.log('You can now start fresh with a new registration.\n');
-
+        console.log("Successfully cleared all data from the database.");
         process.exit(0);
     } catch (err) {
-        console.error('Error during cleanup:', err);
+        console.error("Error clearing DB:", err);
         process.exit(1);
     }
-}
+};
 
 clearDB();
