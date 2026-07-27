@@ -46,15 +46,32 @@ const authRoutes = require('./routes/auth');
 const loanRoutes = require('./routes/loans');
 const creditScoreRoutes = require('./routes/creditScore');
 const userRoutes = require('./routes/users');
+const notificationRoutes = require('./routes/notifications');
+const chitFundRoutes = require('./routes/chitFunds');
 
 // Mount Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/loans', loanRoutes);
 app.use('/api/credit-score', creditScoreRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/chitfunds', chitFundRoutes);
 
 // Test Route
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
+
+// Dev Route to Clear DB
+app.post('/api/dev/clear-db', async (req, res) => {
+    try {
+        const collections = mongoose.connection.collections;
+        for (const key in collections) {
+            await collections[key].deleteMany();
+        }
+        res.json({ success: true, message: 'Database completely cleared for testing.' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
 
 // Global Error Handler
 app.use((err, req, res, next) => {

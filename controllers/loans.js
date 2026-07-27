@@ -1,3 +1,4 @@
+const Notification = require('../models/Notification');
 const Loan = require('../models/Loan');
 const User = require('../models/User');
 const { sendOtp } = require('../utils/otpProvider');
@@ -146,6 +147,7 @@ exports.createLoan = async (req, res) => {
         // Send FCM alert telling borrower setup has been initiated
         if (borrower.fcmToken) {
             const { sendPushNotification } = require('../utils/fcm');
+            Notification.create({ userId: borrower._id, title: 'Lender Setup Verification', body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`, data: { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() } }).catch(err => console.log('Notification DB Error', err));
             sendPushNotification(
                 borrower.fcmToken,
                 'Lender Setup Verification',
@@ -179,8 +181,22 @@ exports.getGivenLoans = async (req, res) => {
     try {
         const loans = await Loan.find({ lender: req.user.id });
         const loansMapped = [];
+        const User = require('../models/User'); // Import User model
         for (const loan of loans) {
-            loansMapped.push(loan.toObject ? loan.toObject() : loan);
+            const loanObj = loan.toObject ? loan.toObject() : loan;
+            
+            // Dynamically fetch borrower name if registered
+            if (loanObj.borrower) {
+                const borrowerUser = await User.findOne({ id: loanObj.borrower });
+                if (borrowerUser) {
+                    const realName = `${borrowerUser.firstName || ''} ${borrowerUser.lastName || ''}`.trim();
+                    if (realName) {
+                        loanObj.borrowerName = realName;
+                    }
+                }
+            }
+            
+            loansMapped.push(loanObj);
         }
         
         // --- CHIT FUNDS AGGREGATION ---
