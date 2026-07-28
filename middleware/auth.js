@@ -8,11 +8,9 @@ const protect = async (req, res, next) => {
         req.headers.authorization &&
         req.headers.authorization.startsWith('Bearer')
     ) {
-        // Set token from Bearer token in header
         token = req.headers.authorization.split(' ')[1];
     }
 
-    // Make sure token exists
     if (!token) {
         return res.status(401).json({
             success: false,
@@ -21,20 +19,26 @@ const protect = async (req, res, next) => {
     }
 
     try {
-        // Verify token
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-        req.user = await User.findOne({ id: decoded.id });
+        req.user = await User.findOne({ id: decoded.id }).select('-__v');
 
         if (!req.user) {
             return res.status(401).json({
                 success: false,
-                message: 'No user found with this id'
+                message: 'User account not found'
             });
         }
 
         next();
     } catch (err) {
+        if (err.name === 'TokenExpiredError') {
+            return res.status(419).json({
+                success: false,
+                message: 'Session expired, please login again',
+                code: 'TOKEN_EXPIRED'
+            });
+        }
         return res.status(401).json({
             success: false,
             message: 'Not authorized to access this route'
