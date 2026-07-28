@@ -7,6 +7,7 @@ const { updateCreditScore } = require('../utils/creditScoreCalc');
 const { sendEmail } = require('../utils/email');
 const axios = require('axios');
 const { invalidateLoanCache } = require('../middleware/cache');
+const { cacheGet, cacheSet, cacheInvalidate } = require('../config/redis');
 // Helper to verify Firebase OTP via Identity Toolkit API
 async function verifyFirebaseOtp(verificationId, otp) {
     if (otp === '124124') {
@@ -141,6 +142,7 @@ exports.createLoan = async (req, res) => {
         });
         
         await invalidateLoanCache(loan.lender, loan.borrower);
+        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
         const lenderName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'A lender';
 
@@ -179,6 +181,10 @@ exports.createLoan = async (req, res) => {
 // @access  Private
 exports.getGivenLoans = async (req, res) => {
     try {
+        const cacheKey = `loans:given:${req.user.id}`;
+        const cached = await cacheGet(cacheKey);
+        if (cached) return res.status(200).json(cached);
+
         const loans = await Loan.find({ lender: req.user.id });
         const loansMapped = [];
         const User = require('../models/User'); // Import User model
@@ -228,6 +234,7 @@ exports.getGivenLoans = async (req, res) => {
             return bDate - aDate;
         });
 
+        await cacheSet(cacheKey, { success: true, loans: loansMapped }, 120);
         res.status(200).json({ success: true, loans: loansMapped });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -239,6 +246,10 @@ exports.getGivenLoans = async (req, res) => {
 // @access  Private
 exports.getTakenLoans = async (req, res) => {
     try {
+        const cacheKey = `loans:taken:${req.user.id}`;
+        const cached = await cacheGet(cacheKey);
+        if (cached) return res.status(200).json(cached);
+
         // Sanitize phone for query consistency
         const phone = req.user.phone.toString().replace(/^\+?91/, '');
         const loans = await Loan.find({
@@ -301,6 +312,7 @@ exports.getTakenLoans = async (req, res) => {
             return bDate - aDate;
         });
 
+        await cacheSet(cacheKey, { success: true, loans: loansWithLender }, 120);
         res.status(200).json({ success: true, loans: loansWithLender });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -383,6 +395,7 @@ exports.verifyLoan = async (req, res) => {
         console.log(`[DEBUG] Match! Activating Loan ${loan._id}`);
         await loan.save();
         await invalidateLoanCache(loan.lender, loan.borrower);
+        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
         const { sendPushNotification } = require('../utils/fcm');
 
@@ -478,6 +491,7 @@ exports.updateProgress = async (req, res) => {
         }
         await loan.save();
         await invalidateLoanCache(loan.lender, loan.borrower);
+        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
         // Update Credit Score of borrower
         if (loan.borrower) {
@@ -549,6 +563,7 @@ exports.verifyLenderOtp = async (req, res) => {
         loan.isOtpVerified = true;
         await loan.save();
         await invalidateLoanCache(loan.lender, loan.borrower);
+        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
         // Now trigger the Push Notification to the borrower
         const borrowerUser = await User.findOne({ id: loan.borrower });
@@ -631,6 +646,7 @@ exports.closeLoan = async (req, res) => {
 
         await loan.save();
         await invalidateLoanCache(loan.lender, loan.borrower);
+        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
         const { sendPushNotification } = require('../utils/fcm');
         

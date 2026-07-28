@@ -5,6 +5,7 @@ const ChitAuction = require('../models/ChitAuction');
 const ChitBid = require('../models/ChitBid');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
+const { cacheGet, cacheSet, cacheInvalidate, cacheInvalidatePattern } = require('../config/redis');
 
 // @desc    Create a new Chit Fund Group
 // @route   POST /api/chitfunds
@@ -34,6 +35,7 @@ exports.createChitFund = async (req, res) => {
         chit.currentSubscribersCount = 1;
         await chit.save();
 
+        await cacheInvalidate(`chit:managed:${req.user.id}`, `chit:joined:${req.user.id}`);
         res.status(201).json({ success: true, chit });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -129,7 +131,12 @@ exports.acceptInvite = async (req, res) => {
 // @access  Private
 exports.getManagedChitFunds = async (req, res) => {
     try {
+        const cacheKey = `chit:managed:${req.user.id}`;
+        const cached = await cacheGet(cacheKey);
+        if (cached) return res.status(200).json(cached);
+
         const chits = await ChitFund.find({ owner: req.user.id });
+        await cacheSet(cacheKey, { success: true, chits }, 120);
         res.status(200).json({ success: true, chits });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -141,8 +148,13 @@ exports.getManagedChitFunds = async (req, res) => {
 // @access  Private
 exports.getJoinedChitFunds = async (req, res) => {
     try {
+        const cacheKey = `chit:joined:${req.user.id}`;
+        const cached = await cacheGet(cacheKey);
+        if (cached) return res.status(200).json(cached);
+
         const subscriptions = await ChitSubscription.find({ user: req.user.id }).populate('chitFund');
         const chits = subscriptions.map(sub => sub.chitFund);
+        await cacheSet(cacheKey, { success: true, chits }, 120);
         res.status(200).json({ success: true, chits });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -163,6 +175,7 @@ exports.startChitFund = async (req, res) => {
         chit.activeAuctionMonth = 1;
         await chit.save();
 
+        await cacheInvalidate(`chit:dashboard:${chit._id}`, `chit:managed:${req.user.id}`);
         res.status(200).json({ success: true, chit });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -249,6 +262,7 @@ exports.declareWinner = async (req, res) => {
         }
         await chit.save();
 
+        await cacheInvalidate(`chit:dashboard:${chit._id}`);
         res.status(200).json({ success: true, auction, finalMonthlyInstallment, prizePayout });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -406,6 +420,7 @@ exports.openAuctionMonth = async (req, res) => {
             }
         }
 
+        await cacheInvalidate(`chit:dashboard:${chit._id}`);
         res.status(200).json({ success: true, message: 'Auction opened and members notified', chit });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -452,6 +467,7 @@ exports.verifyMonthPayment = async (req, res) => {
             }).catch(() => {}); // non-critical
         }
 
+        await cacheInvalidate(`chit:dashboard:${req.params.id}`);
         res.status(200).json({ success: true, message: `Payment ${isPaid ? 'marked as paid' : 'marked as unpaid'}` });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -464,6 +480,10 @@ exports.verifyMonthPayment = async (req, res) => {
 exports.getChitDashboard = async (req, res) => {
     try {
         const chitId = req.params.id;
+        const cacheKey = `chit:dashboard:${chitId}`;
+        const cached = await cacheGet(cacheKey);
+        if (cached) return res.status(200).json(cached);
+
         const userId = req.user.id;
         const chit = await ChitFund.findById(chitId);
         if (!chit) return res.status(404).json({ success: false, message: 'Chit fund not found' });
@@ -533,7 +553,7 @@ exports.getChitDashboard = async (req, res) => {
             isOwner,
         };
 
-        res.status(200).json({
+        const responseData = {
             success: true,
             chitDetails,
             members,
@@ -541,7 +561,9 @@ exports.getChitDashboard = async (req, res) => {
             currentMonth: chit.activeAuctionMonth || (chit.completedMonths || 0) + 1,
             completedMonths: chit.completedMonths || 0,
             isOwner,
-        });
+        };
+        await cacheSet(cacheKey, responseData, 60);
+        return res.status(200).json(responseData);
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
