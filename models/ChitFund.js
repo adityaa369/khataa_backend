@@ -52,7 +52,12 @@ const ChitFundSchema = new mongoose.Schema({
     activeAuctionBaseAmount: {
         type: Number,
         default: null
+    },
+    commissionPercentage: {
+        type: Number,
+        default: 5 // 5% commission on winning bid
     }
+
 }, {
     timestamps: true
 });

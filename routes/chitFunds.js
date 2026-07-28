@@ -1,32 +1,40 @@
 const express = require('express');
 const { protect } = require('../middleware/auth');
-const {
-    createChitFund,
-    sendInvite,
-    getPendingInvites,
-    acceptInvite,
-    getManagedChitFunds,
-    getJoinedChitFunds,
-    startChitFund,
-    submitBid,
-    getBids,
-    declareWinner
-} = require('../controllers/chitFunds');
+const chitFundsController = require('../controllers/chitFunds');
 
 const router = express.Router();
 
-router.post('/', protect, createChitFund);
-router.get('/managed', protect, getManagedChitFunds);
-router.get('/joined', protect, getJoinedChitFunds);
+// --- Create ---
+router.post('/', protect, chitFundsController.createChitFund);
 
-router.get('/invites', protect, getPendingInvites);
-router.post('/:id/invite', protect, sendInvite);
-router.post('/invites/:inviteId/accept', protect, acceptInvite);
+// --- Specific list routes (must come before /:id) ---
+router.get('/managed', protect, chitFundsController.getManagedChitFunds);
+router.get('/joined', protect, chitFundsController.getJoinedChitFunds);
+router.get('/invites', protect, chitFundsController.getPendingInvites);
 
-router.post('/:id/start', protect, startChitFund);
+// --- Invite actions ---
+router.post('/:id/invite', protect, chitFundsController.sendInvite);
+router.post('/invites/:inviteId/accept', protect, chitFundsController.acceptInvite);
+router.post('/invites/:inviteId/decline', protect, chitFundsController.declineInvite);
 
-router.post('/:id/bid', protect, submitBid);
-router.get('/:id/bids', protect, getBids);
-router.post('/:id/declare-winner', protect, declareWinner);
+// --- Chit lifecycle ---
+router.post('/:id/start', protect, chitFundsController.startChitFund);
+router.post('/:id/open-auction-month', protect, chitFundsController.openAuctionMonth);
+
+// --- Bidding ---
+router.post('/:id/bid', protect, chitFundsController.submitBid);
+router.get('/:id/bids', protect, chitFundsController.getBids);
+router.post('/:id/declare-winner', protect, chitFundsController.declareWinner);
+
+// --- Payment verification (owner) ---
+router.post('/:id/verify-payment', protect, chitFundsController.verifyMonthPayment);
+
+// --- Detail views ---
+router.get('/:id/member-detail', protect, chitFundsController.getMemberDetail);
+router.get('/:id', protect, chitFundsController.getChitDashboard);
+
+// --- Delete ---
+router.delete('/:id', protect, chitFundsController.deleteChitFund);
 
 module.exports = router;
+
