@@ -37,7 +37,12 @@ const ChitSubscriptionSchema = new mongoose.Schema({
         type: String,
         enum: ['active', 'defaulted', 'completed'],
         default: 'active'
-    }
+    },
+    paymentRecords: [{
+        monthNumber: Number,
+        isPaid: { type: Boolean, default: false },
+        markedAt: Date,
+    }]
 }, {
     timestamps: true
 });
