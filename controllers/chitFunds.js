@@ -583,3 +583,26 @@ exports.declineInvite = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+// @desc    Delete / cancel a chit fund (owner only, only if not yet started)
+// @route   DELETE /api/chitfunds/:id
+// @access  Private (Owner)
+exports.deleteChitFund = async (req, res) => {
+    try {
+        const chit = await ChitFund.findById(req.params.id);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit fund not found' });
+        if (chit.owner !== req.user.id) return res.status(403).json({ success: false, message: 'Not authorized' });
+        if (chit.status === 'active') {
+            return res.status(400).json({ success: false, message: 'Cannot delete an active chit fund. Close it first.' });
+        }
+
+        // Remove associated subscriptions and invites
+        await ChitSubscription.deleteMany({ chitFund: chit._id });
+        await ChitInvite.deleteMany({ chitFund: chit._id });
+        await chit.deleteOne();
+
+        res.status(200).json({ success: true, message: 'Chit fund deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
