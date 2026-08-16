@@ -75,7 +75,30 @@ const LoanSchema = new mongoose.Schema({
     documentUrl: {
         type: String,
         required: false
-    }
+    },
+    paidAmount: {
+        type: Number,
+        default: 0
+    },
+    transactions: [
+        {
+            type: {
+                type: String,
+                enum: ['payment', 'interest_payment', 'credit_added', 'loan_given'],
+                required: true
+            },
+            amount: {
+                type: Number,
+                required: true
+            },
+            note: String,
+            recordedAt: {
+                type: Date,
+                default: Date.now
+            },
+            recordedBy: String
+        }
+    ]
 }, {
     timestamps: true
 });

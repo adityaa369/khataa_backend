@@ -393,6 +393,18 @@ exports.verifyLoan = async (req, res) => {
         }
 
         console.log(`[DEBUG] Match! Activating Loan ${loan._id}`);
+        // Seed initial loan_given transaction
+        if (!loan.transactions) loan.transactions = [];
+        if (loan.transactions.length === 0) {
+            loan.transactions.push({
+                type: 'loan_given',
+                amount: loan.amount,
+                note: 'Loan disbursed to borrower',
+                recordedAt: new Date(loan.startDate || Date.now()),
+                recordedBy: loan.lender
+            });
+        }
+        loan.paidAmount = 0;
         await loan.save();
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
@@ -767,12 +779,29 @@ async function _handleCustomTransaction(req, res, actionType) {
 
         if (actionType === 'recordPayment' || actionType === 'recordInterest') {
             loan.totalPayable = Math.max(0, loan.totalPayable - amount);
+            loan.paidAmount = (loan.paidAmount || 0) + amount;
             notifTitle = 'Payment Recorded';
             notifBody = `Your lender recorded a payment of ₹${amount}. Your remaining balance is ₹${loan.totalPayable}.`;
+            if (!loan.transactions) loan.transactions = [];
+            loan.transactions.push({
+                type: actionType === 'recordInterest' ? 'interest_payment' : 'payment',
+                amount,
+                note: actionType === 'recordInterest' ? 'Interest payment recorded' : 'Principal payment recorded',
+                recordedAt: new Date(),
+                recordedBy: req.user.id
+            });
         } else if (actionType === 'addCredit') {
             loan.totalPayable += amount;
             notifTitle = 'Credit Added';
             notifBody = `Your lender added a credit of ₹${amount}. Your total payable is now ₹${loan.totalPayable}.`;
+            if (!loan.transactions) loan.transactions = [];
+            loan.transactions.push({
+                type: 'credit_added',
+                amount,
+                note: 'Credit added by lender',
+                recordedAt: new Date(),
+                recordedBy: req.user.id
+            });
         }
 
         if (loan.totalPayable <= 0) {
@@ -817,7 +846,7 @@ async function _handleCustomTransaction(req, res, actionType) {
             }
         }
 
-        res.status(200).json({ success: true, loan });
+        res.status(200).json({ success: true, loan, transactions: loan.transactions || [] });
     } catch (err) {
         console.error('[Loans] customTransaction Error:', err.message);
         res.status(500).json({ success: false, message: err.message });
