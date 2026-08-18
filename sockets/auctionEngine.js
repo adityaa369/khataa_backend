@@ -1,5 +1,7 @@
 const { Server } = require('socket.io');
 const Redis = require('ioredis');
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 const ChitLedger = require('../models/ChitLedger');
 const ChitGroup = require('../models/ChitGroup');
 
@@ -18,8 +20,27 @@ const activeAuctions = {}; // In-memory fallback/cache
 function initAuctionEngine(server) {
     const io = new Server(server, {
         cors: {
-            origin: "*", // allow flutter client
-            methods: ["GET", "POST"]
+            origin: process.env.NODE_ENV === 'production'
+                ? ['https://khataa-backend.onrender.com']
+                : ['http://localhost:3000', 'http://localhost:8080'],
+            credentials: true
+        }
+    });
+
+    // Auth middleware — runs before any connection is accepted
+    io.use(async (socket, next) => {
+        try {
+            const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.split(' ')[1];
+            if (!token) {
+                return next(new Error('Authentication required'));
+            }
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            const user = await User.findOne({ id: decoded.id });
+            if (!user) return next(new Error('User not found'));
+            socket.user = user; // attach user to socket
+            next();
+        } catch (err) {
+            next(new Error('Invalid token'));
         }
     });
 
@@ -28,7 +49,8 @@ function initAuctionEngine(server) {
 
         // Join an auction room
         socket.on('join_auction', async (data) => {
-            const { ledgerId, userId } = data;
+            const { ledgerId } = data;
+            const userId = socket.user.id;
             socket.join(ledgerId);
             console.log(`[Auction] User ${userId} joined room ${ledgerId}`);
 
@@ -55,7 +77,8 @@ function initAuctionEngine(server) {
 
         // Handle incoming bids
         socket.on('place_bid', async (data) => {
-            const { ledgerId, userId, bidAmount } = data;
+            const { ledgerId, bidAmount } = data;
+            const userId = socket.user.id;
             
             const auction = activeAuctions[ledgerId];
             if (!auction) return; // Auction not active

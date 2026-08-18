@@ -27,6 +27,7 @@ const UserSchema = new mongoose.Schema({
     address: String,
     password: {
         type: String,
+        select: false,
         required: false
     },
     pan: String,
@@ -37,6 +38,15 @@ const UserSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    isEmailVerified: {
+        type: Boolean,
+        default: false
+    },
+    emailVerificationToken: {
+        type: String,
+        select: false
+    },
+    emailVerificationExpires: Date,
     fcmToken: {
         type: String,
         required: false
