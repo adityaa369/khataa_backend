@@ -48,7 +48,7 @@ const globalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 20, // 20 auth attempts per 15 min
+    max: 5, // 20 auth attempts per 15 min
     message: { success: false, message: 'Too many authentication attempts, please wait.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -118,6 +118,10 @@ app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata AP
 // ─── Dev-only DB Clear (NEVER in production) ────────────────────────────────
 if (process.env.NODE_ENV !== 'production') {
     app.get('/api/dev/clear-db', async (req, res) => {
+        const devKey = req.headers['x-dev-key'];
+        if (!devKey || devKey !== process.env.DEV_CLEAR_KEY) {
+            return res.status(403).json({ success: false, message: 'Forbidden' });
+        }
         try {
             const collections = mongoose.connection.collections;
             for (const key in collections) {
