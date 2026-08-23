@@ -36,10 +36,44 @@ exports.getDashboard = async (req, res) => {
     ]);
     
     const killSwitch = await cacheGet('FINANCIAL_KILL_SWITCH');
+
+    // Infrastructure Observability
+    const mongoose = require('mongoose');
+    const { getRedisClient, isRedisAvailable } = require('../config/redis');
     
+    // DB Latency check
+    const dbStart = process.hrtime.bigint();
+    let dbStatus = mongoose.connection.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED';
+    if (dbStatus === 'CONNECTED') {
+        try {
+            await mongoose.connection.db.admin().ping();
+        } catch(e) {
+            dbStatus = 'DISCONNECTED';
+        }
+    }
+    const dbLatency = Number(process.hrtime.bigint() - dbStart) / 1e6;
+
+    // Redis Latency check
+    const redisStart = process.hrtime.bigint();
+    let redisStatus = isRedisAvailable() ? 'READY' : 'DISCONNECTED';
+    if (redisStatus === 'READY') {
+        try {
+            const client = getRedisClient();
+            await client.ping();
+        } catch(e) {
+            redisStatus = 'DISCONNECTED';
+        }
+    }
+    const redisLatency = Number(process.hrtime.bigint() - redisStart) / 1e6;
+
+    const infrastructure = {
+        database: { status: dbStatus, latencyMs: Math.round(dbLatency) },
+        redis: { status: redisStatus, latencyMs: Math.round(redisLatency) }
+    };
     res.status(200).json({
         success: true,
         health: getMetricsSnapshot(),
+        infrastructure,
         incidents,
         killSwitchEnabled: killSwitch === 'true'
     });
@@ -133,5 +167,7 @@ exports.getLoans = async (req, res) => {
     ]);
     res.status(200).json({ success: true, data: loans, summary });
 };
+
+
 
 
