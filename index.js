@@ -70,8 +70,6 @@ const authLimiter = rateLimit({
 const financialKillSwitch = require('./middleware/financialKillSwitch');
 app.use(financialKillSwitch);
 app.use('/api', globalLimiter);
-const adminRoutes = require('./routes/admin');
-app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authLimiter);
 
 // ---------------- Readiness & Liveness ----------------
@@ -154,6 +152,7 @@ app.use((req, res, next) => {
 });
 
 // â”€â”€â”€ Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const adminRoutes = require('./routes/admin');
 const authRoutes = require('./routes/auth');
 const loanRoutes = require('./routes/loans');
 const creditScoreRoutes = require('./routes/creditScore');
@@ -161,6 +160,7 @@ const userRoutes = require('./routes/users');
 const notificationRoutes = require('./routes/notifications');
 const chitFundRoutes = require('./routes/chitFunds');
 
+app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/loans', loanRoutes);
 app.use('/api/credit-score', creditScoreRoutes);
@@ -318,6 +318,7 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[FATAL] Unhandled Rejection:', reason);
     gracefulShutdown('unhandledRejection');
 });
+
 
 
 
