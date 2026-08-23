@@ -169,6 +169,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/chitfunds', chitFundRoutes);
 
 // â”€â”€â”€ Health Check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.get('/api/dev/redis-status', (req, res) => { try { const { getRedisClient, isRedisAvailable } = require('./config/redis'); const client = getRedisClient(); res.json({ available: isRedisAvailable(), status: client ? client.status : 'null' }); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 
 // â”€â”€â”€ Dev-only DB Clear (NEVER in production) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -317,6 +318,8 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[FATAL] Unhandled Rejection:', reason);
     gracefulShutdown('unhandledRejection');
 });
+
+
 
 
 
