@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth');
 const { protect } = require('../middleware/auth');
+const { authLimiter, otpLimiter } = require('../middleware/rateLimiter');
 
 const { validateRegister } = require('../middleware/validate');
 
@@ -12,12 +13,21 @@ router.post('/send-otp', (req, res) => {
     res.status(200).json({ success: true, message: 'OTP flow shifted to Firebase client SDK.' });
 });
 
-router.post('/verify-otp', authController.verifyOtp);
-router.post('/login-password', authController.loginPassword);
-router.post('/send-otp-msg91', authController.sendOtpMsg91);
-router.post('/verify-otp-msg91', authController.verifyOtpMsg91);
-router.post('/register', protect, validateRegister, authController.register);
+router.post('/verify-otp', otpLimiter, authController.verifyOtp);
+router.post('/login-password', authLimiter, authController.loginPassword);
+router.post('/register', authLimiter, protect, validateRegister, authController.register);
 router.get('/me', protect, authController.getMe);
 router.get('/verify-email/:token', authController.verifyEmail);
 
+
+router.post('/refresh', authController.refreshToken);
+router.post('/logout', protect, authController.logout);
+router.get('/sessions', protect, authController.getSessions);
+router.delete('/sessions/:sessionId', protect, authController.revokeSession);
+router.post('/forgot-password', authLimiter, authController.forgotPassword);
+router.post('/reset-password', authController.resetPassword);
+
 module.exports = router;
+
+
+

@@ -49,5 +49,7 @@ const ChitSubscriptionSchema = new mongoose.Schema({
 
 // Prevent duplicate subscriptions to the same chit fund by the same user
 ChitSubscriptionSchema.index({ user: 1, chitFund: 1 }, { unique: true });
+ChitSubscriptionSchema.index({ chitFund: 1, user: 1 });
 
 module.exports = mongoose.model('ChitSubscription', ChitSubscriptionSchema);
+
