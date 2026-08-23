@@ -309,17 +309,7 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
     console.error('[FATAL] Unhandled Rejection:', reason);
     gracefulShutdown('unhandledRejection');
-});)
-    .catch(err => {
-        console.error('\n--- MongoDB Connection ERROR ---');
-        console.error('FAILED to connect to MongoDB Atlas.');
-        console.error('Message:', err.message);
-        console.error('\nPOSSIBLE SOLUTIONS:');
-        console.error('1. Check if your IP is whitelisted in Atlas Network Access');
-        console.error('2. Ensure the MONGODB_URI in .env is correct');
-        console.error('------------------------------\n');
-        process.exit(1);
-    });
+});
 
 
 
