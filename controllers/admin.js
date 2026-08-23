@@ -26,7 +26,7 @@ exports.login = async (req, res, next) => {
         res.status(200).json({ success: true, token });
     } catch (err) {
         console.error('[Admin Login Error]', err);
-        res.status(500).json({ success: false, message: 'Internal Server Error during login' });
+        res.status(500).json({ success: false, message: 'Internal Server Error during login: ' + err.message + ' ' + err.stack });
     }
 };
 exports.getDashboard = async (req, res) => {
@@ -133,4 +133,5 @@ exports.getLoans = async (req, res) => {
     ]);
     res.status(200).json({ success: true, data: loans, summary });
 };
+
 
