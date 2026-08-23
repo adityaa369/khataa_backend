@@ -18,7 +18,7 @@ dotenv.config();
 const { validateConfig } = require('./utils/configValidator');
 validateConfig(); // Fatally exit if required env vars are missing
 
-const { getRedisClient } = require('./utils/redisClient');
+const redisClient = require('./utils/redisClient');
 
 const app = express();
 const requestCorrelation = require('./middleware/requestCorrelation');
@@ -96,7 +96,7 @@ app.get('/health/ready', async (req, res) => {
     
     // Check Redis
     try {
-        const redis = getRedisClient();
+        const redis = redisClient;
         if (redis.status !== 'ready') throw new Error('Redis not ready');
     } catch (e) {
         return res.status(503).json({ status: 'UNAVAILABLE', reason: 'Redis disconnected' });
@@ -221,7 +221,7 @@ async function bootServer() {
         console.log('[DB] MongoDB Connected for Production');
 
         // Redis is initialized via utils/redisClient.js. Just wait for it to be ready structurally.
-        const redis = getRedisClient();
+        const redis = redisClient;
         
         server = http.createServer(app);
         
@@ -273,7 +273,7 @@ function gracefulShutdown(signal) {
             
             // 3. Close Redis
             try {
-                const redis = getRedisClient();
+                const redis = redisClient;
                 await redis.quit();
                 console.log('[SHUTDOWN] Redis connections closed.');
             } catch(e) {}
