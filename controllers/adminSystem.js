@@ -1,6 +1,6 @@
 const Admin = require('../models/Admin');
 const AdminAuditLog = require('../models/AdminAuditLog');
-const { getCacheClient } = require('../utils/cache');
+const cacheClient = require('../utils/redisClient');
 const { getTraceContext } = require('../utils/asyncContext');
 
 exports.getAdmins = async (req, res) => {
@@ -20,8 +20,6 @@ exports.toggleKillSwitch = async (req, res) => {
     if (!reason || reason.trim() === '') {
         return res.status(400).json({ success: false, message: 'A mandatory reason is required to modify the kill switch state.' });
     }
-
-    const cacheClient = getCacheClient();
     const currentState = await cacheClient.get('FINANCIAL_KILL_SWITCH') === 'true';
 
     // Prevent Replay or redundant actions
@@ -49,7 +47,6 @@ exports.toggleKillSwitch = async (req, res) => {
 };
 
 exports.getKillSwitchStatus = async (req, res) => {
-    const cacheClient = getCacheClient();
     const currentState = await cacheClient.get('FINANCIAL_KILL_SWITCH') === 'true';
     res.status(200).json({ success: true, killSwitchEnabled: currentState });
 }
