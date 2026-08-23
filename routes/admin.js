@@ -11,11 +11,7 @@ router.get('/dashboard', requireMFA, getDashboard);
 router.get('/incidents', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getIncidents);
 router.put('/incidents/:id/status', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN'), updateIncident);
 
-// CRITICAL CONTROLS
-router.post('/controls/kill-switch', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), requireMFA, toggleKillSwitch);
 
-
-const { getFinancialOverview, getTransactions, getLoans } = require('../controllers/admin');
 router.get('/financial/overview', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getFinancialOverview);
 router.get('/financial/transactions', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getTransactions);
 router.get('/financial/loans', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getLoans);
