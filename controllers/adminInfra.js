@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { getCacheClient } = require('../utils/cache');
+const cacheClient = require('../utils/redisClient');
 
 exports.getInfraOverview = async (req, res) => {
     // ACTUAL AUTHORITATIVE HEALTH SIGNALS
@@ -9,8 +9,8 @@ exports.getInfraOverview = async (req, res) => {
     let redisHealthy = false;
     let redisLatency = null;
     try {
-        const cacheClient = getCacheClient();
-        if (cacheClient && cacheClient.isReady) {
+        
+        if (cacheClient && cacheClient.status === 'ready') {
             const start = Date.now();
             await cacheClient.ping();
             redisLatency = Date.now() - start;
