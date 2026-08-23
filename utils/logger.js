@@ -1,4 +1,4 @@
-// utils/logger.js
+﻿// utils/logger.js
 const { getTraceContext } = require('./asyncContext');
 
 const originalLog = console.log;
@@ -8,6 +8,9 @@ const originalWarn = console.warn;
 const SENSITIVE_KEYS = ['pan', 'aadhar', 'password', 'otp', 'token', 'jwt', 'secret', 'authorization'];
 
 const redact = (obj) => {
+    if (obj instanceof Error) {
+        return { message: obj.message, stack: obj.stack };
+    }
     if (typeof obj !== 'object' || obj === null) return obj;
     let redacted = Array.isArray(obj) ? [] : {};
     for (let key in obj) {
@@ -24,7 +27,7 @@ const redact = (obj) => {
 
 const formatStructuredLog = (level, args) => {
     const { requestId, userId } = getTraceContext();
-    const payload = args.map(arg => typeof arg === 'object' ? redact(arg) : arg).join(' ');
+    const payload = args.map(arg => typeof arg === 'object' ? JSON.stringify(redact(arg)) : arg).join(' ');
     
     return JSON.stringify({
         timestamp: new Date().toISOString(),
@@ -58,3 +61,5 @@ module.exports = {
         }
     }
 };
+
+

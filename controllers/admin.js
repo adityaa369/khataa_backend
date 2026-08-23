@@ -1,28 +1,34 @@
-const Admin = require('../models/Admin');
+﻿const Admin = require('../models/Admin');
 const jwt = require('jsonwebtoken');
 const { cacheSet, cacheGet } = require('../config/redis');
 const { logAdminAction } = require('../middleware/adminAuth');
 const ReconciliationIncident = require('../models/ReconciliationIncident');
 const { getMetricsSnapshot } = require('../middleware/metrics');
 
-exports.login = async (req, res) => {
-    // Mock login for simulation
-    const { email, password } = req.body;
-    const admin = await Admin.findOne({ email });
-    if (!admin || !(await admin.comparePassword(password))) {
-        return res.status(401).json({ success: false, message: 'Invalid credentials' });
+exports.login = async (req, res, next) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Email and password required' });
+        }
+        
+        const admin = await Admin.findOne({ email });
+        if (!admin || !(await admin.comparePassword(password))) {
+            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+        
+        const token = jwt.sign(
+            { adminId: admin._id, role: admin.role, mfaVerified: true }, 
+            process.env.JWT_SECRET, 
+            { expiresIn: '1h' }
+        );
+        
+        res.status(200).json({ success: true, token });
+    } catch (err) {
+        console.error('[Admin Login Error]', err);
+        res.status(500).json({ success: false, message: 'Internal Server Error during login' });
     }
-    
-    // In real app, this would return a pre-MFA token. We'll issue a full MFA-verified token for simulation.
-    const token = jwt.sign(
-        { adminId: admin._id, role: admin.role, mfaVerified: true }, 
-        process.env.JWT_SECRET, 
-        { expiresIn: '1h' } // Short-lived admin session
-    );
-    
-    res.status(200).json({ success: true, token });
 };
-
 exports.getDashboard = async (req, res) => {
     // 4.12B Operations Dashboard
     const incidents = await ReconciliationIncident.aggregate([
@@ -127,3 +133,4 @@ exports.getLoans = async (req, res) => {
     ]);
     res.status(200).json({ success: true, data: loans, summary });
 };
+
