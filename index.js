@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 // Override global console to enforce strict PII redaction across the entire app
 const logger = require('./utils/logger');
 global.console = { ...global.console, ...logger };
@@ -26,13 +26,13 @@ app.use(requestCorrelation);
 const { metricsMiddleware, getMetricsSnapshot } = require('./middleware/metrics');
 app.use(metricsMiddleware);
 
-// ─── Security Headers ───────────────────────────────────────────────────────
+// â”€â”€â”€ Security Headers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow uploads to load
     contentSecurityPolicy: false, // mobile API, not a browser app
 }));
 
-// ─── CORS ───────────────────────────────────────────────────────────────────
+// â”€â”€â”€ CORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const allowedOrigins = [
     'https://khataa-backend.onrender.com',
     // Add your future web dashboard URL here if needed
@@ -49,7 +49,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-// ─── Rate Limiting ──────────────────────────────────────────────────────────
+// â”€â”€â”€ Rate Limiting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 200,
@@ -114,16 +114,16 @@ app.use((req, res, next) => {
     next();
 });
 
-// ─── Body Parsing ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Body Parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use(compression());
 app.use(bodyParser.json({ limit: '100kb' }));
 app.use(bodyParser.urlencoded({ limit: '100kb', extended: true }));
 
-// ─── NoSQL Injection & Parameter Pollution Protection ───────────────────────
+// â”€â”€â”€ NoSQL Injection & Parameter Pollution Protection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use(mongoSanitize()); // strips $, . from request body/params/query
 app.use(hpp());           // removes duplicate query params
 
-// ─── Static Files ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Static Files â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const path = require('path');
 const fs = require('fs');
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -132,13 +132,13 @@ if (!fs.existsSync(uploadsDir)) {
 }
 app.use('/uploads', express.static(uploadsDir));
 
-// ─── Ensure req.body always exists ──────────────────────────────────────────
+// â”€â”€â”€ Ensure req.body always exists â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((req, res, next) => {
     req.body = req.body || {};
     next();
 });
 
-// ─── Request Logging (scrub sensitive fields) ───────────────────────────────
+// â”€â”€â”€ Request Logging (scrub sensitive fields) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((req, res, next) => {
     if (process.env.NODE_ENV !== 'production') {
         console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
@@ -153,7 +153,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// ─── Routes ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const authRoutes = require('./routes/auth');
 const loanRoutes = require('./routes/loans');
 const creditScoreRoutes = require('./routes/creditScore');
@@ -168,10 +168,10 @@ app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/chitfunds', chitFundRoutes);
 
-// ─── Health Check ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Health Check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 
-// ─── Dev-only DB Clear (NEVER in production) ────────────────────────────────
+// â”€â”€â”€ Dev-only DB Clear (NEVER in production) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 if (process.env.NODE_ENV !== 'production') {
     app.get('/api/dev/clear-db', async (req, res) => {
         const devKey = req.headers['x-dev-key'];
@@ -190,7 +190,7 @@ if (process.env.NODE_ENV !== 'production') {
     });
 }
 
-// ─── Global Error Handler ───────────────────────────────────────────────────
+// â”€â”€â”€ Global Error Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((err, req, res, next) => {
     if (err.message === 'Not allowed by CORS') {
         return res.status(403).json({ success: false, message: 'CORS policy violation' });
@@ -201,7 +201,7 @@ app.use((err, req, res, next) => {
     res.status(500).json({ success: false, message: 'Internal Server Error' });
 });
 
-// ─── MongoDB Connection ─────────────────────────────────────────────────────
+// â”€â”€â”€ MongoDB Connection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const initAuctionEngine = require('./sockets/auctionEngine');
 
 const PORT = process.env.PORT || 5000;
@@ -214,15 +214,22 @@ async function bootServer() {
         await mongoose.connect(process.env.MONGODB_URI, {
             serverSelectionTimeoutMS: 5000, 
             connectTimeoutMS: 10000,
-            maxPoolSize: 15, // Tuned for 4-8 PM2 workers to safely stay under Atlas free tier limit
+            maxPoolSize: 15,
             socketTimeoutMS: 45000,
             heartbeatFrequencyMS: 10000
         });
         console.log('[DB] MongoDB Connected for Production');
 
-        // Redis is initialized via utils/redisClient.js. Just wait for it to be ready structurally.
-        const redis = redisClient;
-        
+        // Redis is strictly initialized
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                const { connectRedisStrict } = require('./config/redis');
+                await connectRedisStrict();
+            } catch (error) {
+                console.error('[STARTUP] CRITICAL: Production Redis unavailable.');
+                process.exit(1);
+            }
+        }
         server = http.createServer(app);
         
         // Initialize WebSockets for Live Auctions
@@ -271,10 +278,10 @@ function gracefulShutdown(signal) {
         server.close(async () => {
             console.log('[SHUTDOWN] HTTP server closed. Cleaning up databases...');
             
-            // 3. Close Redis
+                        // 3. Close Redis
             try {
-                const redis = redisClient;
-                await redis.quit();
+                const redis = redisClient.getRedisClient();
+                if (redis) await redis.quit();
                 console.log('[SHUTDOWN] Redis connections closed.');
             } catch(e) {}
 
@@ -310,6 +317,7 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[FATAL] Unhandled Rejection:', reason);
     gracefulShutdown('unhandledRejection');
 });
+
 
 
 

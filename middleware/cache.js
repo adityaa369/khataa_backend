@@ -1,25 +1,4 @@
-const Redis = require('ioredis');
-
-// Ensure Redis connection doesn't crash the app if unavailable
-let redisClient;
-try {
-    redisClient = new Redis(process.env.REDIS_URI || 'redis://127.0.0.1:6379', {
-        maxRetriesPerRequest: 1,
-        retryStrategy(times) {
-            if (times > 3) {
-                console.warn('[Redis] Connection failed, disabling cache.');
-                return null;
-            }
-            return Math.min(times * 50, 2000);
-        }
-    });
-    
-    redisClient.on('error', (err) => {
-        console.error('[Redis Cache] Error:', err.message);
-    });
-} catch (e) {
-    console.error('[Redis Cache] Failed to initialize:', e.message);
-}
+﻿const { getRedisClient, isRedisAvailable } = require('../config/redis');
 
 /**
  * Middleware to check if response is cached
@@ -28,16 +7,17 @@ try {
  */
 const cacheMiddleware = (keyPrefix, ttlSeconds = 300) => {
     return async (req, res, next) => {
-        if (!redisClient || redisClient.status !== 'ready') {
+        const client = getRedisClient();
+        if (!client || !isRedisAvailable()) {
             return next();
         }
 
         try {
             // Generate unique cache key per user
             const userId = req.user.id;
-            const cacheKey = `${keyPrefix}_${userId}`;
+            const cacheKey = \\_\\;
             
-            const cachedData = await redisClient.get(cacheKey);
+            const cachedData = await client.get(cacheKey);
             if (cachedData) {
                 // If data exists, return it immediately
                 return res.status(200).json(JSON.parse(cachedData));
@@ -48,7 +28,7 @@ const cacheMiddleware = (keyPrefix, ttlSeconds = 300) => {
             res.json = (body) => {
                 if (body.success) {
                     // Cache the successful response
-                    redisClient.setex(cacheKey, ttlSeconds, JSON.stringify(body)).catch(err => 
+                    client.setex(cacheKey, ttlSeconds, JSON.stringify(body)).catch(err => 
                         console.error('[Redis] Failed to cache response:', err.message)
                     );
                 }
@@ -68,14 +48,15 @@ const cacheMiddleware = (keyPrefix, ttlSeconds = 300) => {
  * @param {string} userId - The ID of the user
  */
 const invalidateUserCache = async (userId) => {
-    if (!redisClient || redisClient.status !== 'ready') return;
+    const client = getRedisClient();
+    if (!client || !isRedisAvailable()) return;
     try {
         const keys = [
-            `given_loans_${userId}`,
-            `taken_loans_${userId}`
+            \given_loans_\\,
+            \	aken_loans_\\
         ];
-        await redisClient.del(...keys);
-        console.log(`[Redis] Invalidated cache for user ${userId}`);
+        await client.del(...keys);
+        console.log(\[Redis] Invalidated cache for user \\);
     } catch (error) {
         console.error('[Redis] Invalidation error:', error.message);
     }
@@ -92,7 +73,6 @@ const invalidateLoanCache = async (lenderId, borrowerId) => {
 };
 
 module.exports = {
-    redisClient,
     cacheMiddleware,
     invalidateUserCache,
     invalidateLoanCache
