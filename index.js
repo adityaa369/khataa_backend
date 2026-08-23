@@ -94,10 +94,10 @@ app.get('/health/ready', async (req, res) => {
         return res.status(503).json({ status: 'UNAVAILABLE', reason: 'MongoDB disconnected' });
     }
     
-    // Check Redis
+        // Check Redis
     try {
-        const redis = redisClient;
-        if (redis.status !== 'ready') throw new Error('Redis not ready');
+        const { isRedisAvailable } = require('./config/redis');
+        if (!isRedisAvailable()) throw new Error('Redis not ready');
     } catch (e) {
         return res.status(503).json({ status: 'UNAVAILABLE', reason: 'Redis disconnected' });
     }
@@ -317,6 +317,7 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[FATAL] Unhandled Rejection:', reason);
     gracefulShutdown('unhandledRejection');
 });
+
 
 
 
