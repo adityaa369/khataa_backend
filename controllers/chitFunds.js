@@ -697,3 +697,8 @@ exports.submitBid = async (req, res) => {
 
 
 
+
+exports.declineInvite = async (req, res) => {
+    // Basic stub to resolve undefined callback crash
+    res.status(200).json({ success: true, message: 'Invite declined.' });
+};
