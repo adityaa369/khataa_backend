@@ -1,13 +1,22 @@
-FROM node:18-alpine
+# 1. Build Stage
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+# ARCH-015: Deterministic builds
+RUN npm ci --only=production
+COPY . .
 
+# 2. Production Stage
+FROM node:18-alpine
 WORKDIR /app
 
-COPY package*.json ./
+# ARCH-016: Non-root container
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
 
-RUN npm install
-
-COPY . .
+COPY --from=builder --chown=appuser:appgroup /app /app
 
 EXPOSE 5000
 
-CMD ["npm", "start"]
+# ARCH-011: Multi-worker process manager
+CMD ["npx", "pm2-runtime", "start", "ecosystem.config.js"]

@@ -20,10 +20,8 @@ const LoanSchema = new mongoose.Schema({
     },
     borrowerAadhar: String,
     borrowerAddress: String,
-    amount: {
-        type: Number,
-        required: true
-    },
+    amount: { type: Number, required: true },
+    amountPaise: { type: Number, validate: { validator: Number.isInteger } },
     transaction_id: {
         type: String,
         unique: true,
@@ -55,14 +53,10 @@ const LoanSchema = new mongoose.Schema({
     endDate: Date,
     nextDueDate: Date,
     activatedAt: Date,
-    emiAmount: {
-        type: Number,
-        default: 0
-    },
-    totalPayable: {
-        type: Number,
-        default: 0
-    },
+    emiAmount: { type: Number, default: 0 },
+    emiAmountPaise: { type: Number, validate: { validator: Number.isInteger }, default: 0 },
+    totalPayable: { type: Number, default: 0 },
+    totalPayablePaise: { type: Number, validate: { validator: Number.isInteger }, default: 0 },
     loanType: {
         type: String,
         default: 'personal' // e.g., 'home', 'business', 'personal'
@@ -76,10 +70,8 @@ const LoanSchema = new mongoose.Schema({
         type: String,
         required: false
     },
-    paidAmount: {
-        type: Number,
-        default: 0
-    },
+    paidAmount: { type: Number, default: 0 },
+    paidAmountPaise: { type: Number, validate: { validator: Number.isInteger }, default: 0 },
     transactions: [
         {
             type: {
@@ -87,10 +79,8 @@ const LoanSchema = new mongoose.Schema({
                 enum: ['payment', 'interest_payment', 'credit_added', 'loan_given'],
                 required: true
             },
-            amount: {
-                type: Number,
-                required: true
-            },
+            amount: { type: Number, required: true },
+    amountPaise: { type: Number, validate: { validator: Number.isInteger } },
             note: String,
             recordedAt: {
                 type: Date,
@@ -103,8 +93,9 @@ const LoanSchema = new mongoose.Schema({
     timestamps: true
 });
 
-LoanSchema.index({ lender: 1 });
-LoanSchema.index({ borrower: 1 });
+LoanSchema.index({ lender: 1, createdAt: -1 });
+LoanSchema.index({ borrower: 1, createdAt: -1 });
 LoanSchema.index({ borrowerPhone: 1 });
 
 module.exports = mongoose.model('Loan', LoanSchema);
+

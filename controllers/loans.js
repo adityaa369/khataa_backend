@@ -8,6 +8,9 @@ const { sendEmail } = require('../utils/email');
 const { loanGivenTemplate, paymentRecordedTemplate, loanClosedTemplate } = require('../utils/emailTemplates');
 const axios = require('axios');
 const { invalidateLoanCache } = require('../middleware/cache');
+const { trackFinancialEvent, triggerAlert } = require('../utils/telemetry');
+const { metrics } = require('../middleware/metrics');
+const { withTransaction } = require('../utils/dbTransaction');
 const { cacheGet, cacheSet, cacheInvalidate } = require('../config/redis');
 
 function sendError(res, err, status = 500) {
@@ -330,138 +333,51 @@ exports.getTakenLoans = async (req, res) => {
 // @access  Private (Borrower)
 exports.verifyLoan = async (req, res) => {
     try {
-        console.log('\n--- LOAN APPROVAL DEBUG ---');
-        console.log('Loan ID received:', req.params.id);
+        const { otp } = req.body; // Deprecated OTP validation fallback
+        const loanId = req.params.id;
 
-        const currentUserPhone = String(req.user.phone).replace(/\D/g, '').slice(-10);
-        console.log('User attempting approval:', currentUserPhone);
-
-        const loan = await Loan.findById(req.params.id);
-
-        if (!loan) {
-            console.error(`[Loans] Loan ${req.params.id} not found.`);
-            return res.status(404).json({ success: false, message: 'Loan not found' });
-        }
-
-        if (loan.status !== 'pending_approval') {
-            return res.status(400).json({ success: false, message: 'Loan is not ready for approval or already active.' });
-        }
-
-        const isBorrower = String(loan.borrowerPhone).replace(/\D/g, '').slice(-10) === currentUserPhone;
-
-        if (!isBorrower) {
-            return res.status(403).json({ success: false, message: 'Only the designated borrower can approve this loan.' });
-        }
-
-        loan.status = 'active';
-        loan.startDate = Date.now();
-        loan.activatedAt = Date.now();
-        loan.borrower = req.user.id; // Link the borrower's actual user ID
-
-        // Calculate EMI, Total Payable, and Dates
-        if (loan.durationMonths && loan.durationMonths > 0) {
-            const startDate = new Date(loan.startDate);
-
-            // Set end date based on duration
-            const endDate = new Date(startDate);
-            const nextDueDate = new Date(startDate);
+        const { loan, notifyParams } = await withTransaction(async (session) => {
+            const loanRecord = await Loan.findById(loanId).session(session);
+            if (!loanRecord) throw new Error('LOAN_NOT_FOUND');
+            if (loanRecord.borrowerPhone !== req.user.phone) throw new Error('UNAUTHORIZED');
             
-            if (loan.durationType === 'Days') {
-                endDate.setDate(endDate.getDate() + loan.durationMonths);
-                nextDueDate.setDate(nextDueDate.getDate() + Math.min(30, loan.durationMonths));
-            } else {
-                endDate.setMonth(endDate.getMonth() + loan.durationMonths);
-                nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+            // STRICT STATE MACHINE GUARD
+            if (loanRecord.status !== 'pending_approval') {
+                throw new Error('INVALID_STATE_TRANSITION');
             }
+
+            loanRecord.status = 'active';
+            trackFinancialEvent('LOAN_ACCEPTED', { loanId: loanRecord._id });
+            loanRecord.activatedAt = new Date();
+            loanRecord.borrower = req.user.id;
             
-            loan.endDate = endDate;
-            loan.nextDueDate = nextDueDate;
-
-            if (loan.loanType === 'interest_credit' || loan.loanType === 'home' || loan.loanType === 'interestcredit') {
-                const P = loan.amount;
-                const monthlyInterest = P * (loan.interestRate || 0) / 100;
-                loan.emiAmount = monthlyInterest;
-                loan.totalPayable = P + (monthlyInterest * (loan.durationMonths || 1));
-            } else if (loan.interestRate > 0) {
-                const P = loan.amount;
-                const r = loan.interestRate / 100 / 12; // Monthly rate
-                const n = loan.durationType === 'Days' ? (loan.durationMonths / 30) : loan.durationMonths;
-
-                const emi = P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
-                loan.emiAmount = emi;
-                loan.totalPayable = emi * (loan.durationType === 'Days' ? 1 : n);
-            } else {
-                loan.emiAmount = loan.amount / loan.durationMonths;
-                loan.totalPayable = loan.amount;
-            }
-        } else {
-            loan.totalPayable = loan.amount;
-        }
-
-        console.log(`[DEBUG] Match! Activating Loan ${loan._id}`);
-        // Seed initial loan_given transaction
-        if (!loan.transactions) loan.transactions = [];
-        if (loan.transactions.length === 0) {
-            loan.transactions.push({
+            if (!loanRecord.transactions) loanRecord.transactions = [];
+            loanRecord.transactions.push({
                 type: 'loan_given',
-                amount: loan.amount,
-                note: 'Loan disbursed to borrower',
-                recordedAt: new Date(loan.startDate || Date.now()),
-                recordedBy: loan.lender
+                amount: loanRecord.amount,
+                amountPaise: loanRecord.amountPaise,
+                note: 'Loan activated and accepted by borrower',
+                recordedAt: new Date(),
+                recordedBy: req.user.id
             });
-        }
-        loan.paidAmount = 0;
-        await loan.save();
 
-        // Send email notification to borrower
-        try {
-            if (req.user.email) {
-                const lenderUser = await User.findOne({ id: loan.lender });
-                await sendEmail({
-                    to: req.user.email,
-                    subject: `Credit Agreement Activated — ₹${loan.amount.toLocaleString('en-IN')}`,
-                    html: loanGivenTemplate({
-                        lenderName: lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'Your Lender',
-                        borrowerName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.phone,
-                        amount: loan.amount,
-                        loanType: loan.loanType || 'Credit',
-                        duration: loan.durationMonths,
-                        interestRate: loan.interestRate || 0,
-                        startDate: new Date(loan.startDate).toLocaleDateString('en-IN')
-                    })
-                });
-            }
-        } catch (emailErr) {
-            console.error('[Loans] verifyLoan email failed:', emailErr.message);
-        }
-        await invalidateLoanCache(loan.lender, loan.borrower);
-        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+            await loanRecord.save({ session });
+            
+            return {
+                loan: loanRecord,
+                notifyParams: { lenderId: loanRecord.lender, borrowerName: loanRecord.borrowerName }
+            };
+        });
 
-        const { sendPushNotification } = require('../utils/fcm');
-
-        const lenderUser = await User.findOne({ id: loan.lender });
-        if (lenderUser && lenderUser.fcmToken) {
-            sendPushNotification(
-                lenderUser.fcmToken,
-                'Agreement Accepted',
-                `${req.user.firstName || 'A borrower'} has signed and accepted your loan agreement for ₹${loan.amount}.`,
-                { type: 'LOAN_VERIFIED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM Lender verify notification failed:', err.message));
-        }
-
-        if (req.user && req.user.fcmToken) {
-            sendPushNotification(
-                req.user.fcmToken,
-                'Agreement Activated',
-                `Your loan agreement for ₹${loan.amount} is now active and on track.`,
-                { type: 'LOAN_VERIFIED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM Borrower verify notification failed:', err.message));
-        }
+        // External side-effects
+        await invalidateLoanCache(notifyParams.lenderId, loan.borrower);
         
-        console.log('--- END DEBUG ---\n');
-
         res.status(200).json({ success: true, loan });
     } catch (err) {
+        if (err.message === 'INVALID_STATE_TRANSITION') return res.status(400).json({ success: false, message: 'Loan cannot be activated from its current state.'});
+        if (err.message === 'UNAUTHORIZED') return res.status(403).json({ success: false, message: 'You are not authorized to verify this loan.'});
+        if (err.message === 'LOAN_NOT_FOUND') return res.status(404).json({ success: false, message: 'Loan not found.'});
+
         console.error('[Loans] verifyLoan Error:', err.message);
         sendError(res, err);
     }
@@ -824,131 +740,93 @@ exports.uploadDocument = async (req, res) => {
 
 async function _handleCustomTransaction(req, res, actionType) {
     try {
-        const { amount, otp, verificationId } = req.body;
-        const Loan = require('../models/Loan');
-        const { updateCreditScore } = require('../utils/creditScoreCalc');
-        const loan = await Loan.findById(req.params.id);
+        const { amount } = req.body;
+        const amountPaise = Math.round(amount * 100);
+        trackFinancialEvent('LOAN_PAYMENT_STARTED', { actionType, amountPaise });
+        metrics.financial.paymentsAttempted++;
 
-        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
-        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
-        
-        if (!amount || amount <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
-
-        if (!verificationId) {
-            return res.status(400).json({ success: false, message: 'verificationId is required' });
-        }
-
-        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
-        if (!verificationResult.success) {
-            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
-        }
-
-        const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
-        const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
-        if (returnedPhone !== loanPhone) {
-            return res.status(400).json({ success: false, message: 'OTP verified phone does not match borrower phone' });
-        }
-
-        let notifTitle = 'Transaction Complete';
-        let notifBody = '';
-
-        if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-            loan.totalPayable = Math.max(0, loan.totalPayable - amount);
-            loan.paidAmount = (loan.paidAmount || 0) + amount;
-            notifTitle = 'Payment Recorded';
-            notifBody = `Your lender recorded a payment of ₹${amount}. Your remaining balance is ₹${loan.totalPayable}.`;
-            if (!loan.transactions) loan.transactions = [];
-            loan.transactions.push({
-                type: actionType === 'recordInterest' ? 'interest_payment' : 'payment',
-                amount,
-                note: actionType === 'recordInterest' ? 'Interest payment recorded' : 'Principal payment recorded',
-                recordedAt: new Date(),
-                recordedBy: req.user.id
-            });
-        } else if (actionType === 'addCredit') {
-            loan.totalPayable += amount;
-            notifTitle = 'Credit Added';
-            notifBody = `Your lender added a credit of ₹${amount}. Your total payable is now ₹${loan.totalPayable}.`;
-            if (!loan.transactions) loan.transactions = [];
-            loan.transactions.push({
-                type: 'credit_added',
-                amount,
-                note: 'Credit added by lender',
-                recordedAt: new Date(),
-                recordedBy: req.user.id
-            });
-        }
-
-        if (loan.totalPayable <= 0) {
-            loan.status = 'completed';
-            loan.progress = 1.0;
-        } else {
-            let originalTotalPayable = loan.amount;
-            if (loan.loanType === 'interest_credit' || loan.loanType === 'home' || loan.loanType === 'interestcredit') {
-                const P = loan.amount;
-                const monthlyInterest = P * (loan.interestRate || 0) / 100;
-                originalTotalPayable = P + (monthlyInterest * (loan.durationMonths || 1));
-            } else if (loan.interestRate > 0) {
-                const P = loan.amount;
-                const r = loan.interestRate / 100 / 12;
-                const n = loan.durationType === 'Days' ? (loan.durationMonths / 30) : loan.durationMonths;
-                const emi = P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
-                originalTotalPayable = emi * (loan.durationType === 'Days' ? 1 : n);
-            }
+        const { loan, notifTitle, notifBody } = await withTransaction(async (session) => {
+            const currentLoan = await Loan.findById(req.params.id).session(session);
+            if (!currentLoan) throw new Error('LOAN_NOT_FOUND');
+            if (currentLoan.lender !== req.user.id) throw new Error('UNAUTHORIZED');
             
-            if (originalTotalPayable > 0) {
-                const totalPaid = Math.max(0, originalTotalPayable - loan.totalPayable);
-                loan.progress = Math.max(0, Math.min(1.0, totalPaid / originalTotalPayable));
-            }
-        }
+            let title = 'Transaction Complete';
+            let body = '';
 
-        await loan.save();
-
-        // Send payment confirmation email to borrower
-        if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-            try {
-                const borrowerUserForEmail = await User.findOne({ id: loan.borrower });
-                const lenderUserForEmail = await User.findOne({ id: loan.lender });
-                if (borrowerUserForEmail && borrowerUserForEmail.email) {
-                    await sendEmail({
-                        to: borrowerUserForEmail.email,
-                        subject: `Payment Recorded — ₹${amount.toLocaleString('en-IN')} on your credit`,
-                        html: paymentRecordedTemplate({
-                            borrowerName: `${borrowerUserForEmail.firstName || ''} ${borrowerUserForEmail.lastName || ''}`.trim() || borrowerUserForEmail.phone,
-                            lenderName: lenderUserForEmail ? `${lenderUserForEmail.firstName || ''} ${lenderUserForEmail.lastName || ''}`.trim() : 'Your Lender',
-                            amountPaid: amount,
-                            remainingBalance: loan.totalPayable,
-                            paymentDate: new Date().toLocaleDateString('en-IN'),
-                            loanId: loan._id.toString()
-                        })
-                    });
+            if (actionType === 'recordPayment' || actionType === 'recordInterest') {
+                if (amount > currentLoan.totalPayable || amountPaise > currentLoan.totalPayablePaise) {
+                    triggerAlert('OVERPAYMENT_ATTEMPT', 'CRITICAL', { actionType, amountPaise });
+                    metrics.financial.paymentsRejected++;
+                    throw new Error('OVERPAYMENT_PROHIBITED');
                 }
-            } catch (emailErr) {
-                console.error('[Loans] payment email failed:', emailErr.message);
-            }
-        }
-        await invalidateLoanCache(loan.lender, loan.borrower);
+                
+                // Float Fields
+                currentLoan.totalPayable = Math.max(0, currentLoan.totalPayable - amount);
+                currentLoan.paidAmount = (currentLoan.paidAmount || 0) + amount;
+                
+                // Paise Fields
+                currentLoan.totalPayablePaise = Math.max(0, (currentLoan.totalPayablePaise || 0) - amountPaise);
+                currentLoan.paidAmountPaise = (currentLoan.paidAmountPaise || 0) + amountPaise;
 
+                title = 'Payment Recorded';
+                body = `Your lender recorded a payment of ?${amount}. Your remaining balance is ?${currentLoan.totalPayable}.`;
+                
+                if (!currentLoan.transactions) currentLoan.transactions = [];
+                currentLoan.transactions.push({
+                    type: actionType === 'recordInterest' ? 'interest_payment' : 'payment',
+                    amount,
+                    amountPaise,
+                    note: actionType === 'recordInterest' ? 'Interest payment' : 'Principal payment',
+                    recordedAt: new Date(),
+                    recordedBy: req.user.id
+                });
+            } else if (actionType === 'addCredit') {
+                currentLoan.totalPayable += amount;
+                currentLoan.totalPayablePaise = (currentLoan.totalPayablePaise || 0) + amountPaise;
+                
+                title = 'Credit Added';
+                body = `Your lender added a credit of ?${amount}. Your total payable is now ?${currentLoan.totalPayable}.`;
+                
+                if (!currentLoan.transactions) currentLoan.transactions = [];
+                currentLoan.transactions.push({
+                    type: 'credit_added',
+                    amount,
+                    amountPaise,
+                    note: 'Credit added by lender',
+                    recordedAt: new Date(),
+                    recordedBy: req.user.id
+                });
+            }
+
+            if (currentLoan.totalPayablePaise <= 0) {
+                currentLoan.status = 'completed';
+                currentLoan.progress = 1.0;
+            }
+
+            await currentLoan.save({ session });
+            trackFinancialEvent('LOAN_PAYMENT_COMMITTED', { loanId: currentLoan._id, amountPaise });
+            metrics.financial.paymentsCommitted++;
+            return { loan: currentLoan, notifTitle: title, notifBody: body };
+        });
+
+        // External Side Effects (Emails, Notifications)
+        await invalidateLoanCache(loan.lender, loan.borrower);
+        
         if (loan.borrower) {
             await updateCreditScore(loan.borrower);
-            
-            const User = require('../models/User');
             const borrowerUser = await User.findOne({ id: loan.borrower });
             if (borrowerUser && borrowerUser.fcmToken) {
-                const { sendPushNotification } = require('../utils/fcm');
                 sendPushNotification(
                     borrowerUser.fcmToken,
                     notifTitle,
                     notifBody,
                     { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
-                ).catch(err => console.error('[Loans] FCM transaction notification failed:', err.message));
+                ).catch(e => {});
             }
         }
-
         res.status(200).json({ success: true, loan, transactions: loan.transactions || [] });
     } catch (err) {
-        console.error('[Loans] customTransaction Error:', err.message);
+        if (err.message === 'OVERPAYMENT_PROHIBITED') return res.status(400).json({ success: false, message: 'Cannot pay more than outstanding balance' });
         sendError(res, err);
     }
 }

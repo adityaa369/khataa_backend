@@ -4,8 +4,9 @@ services:
     env: node
     plan: free
     region: singapore
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: npm ci
+    startCommand: npx pm2-runtime start ecosystem.config.js
+    healthCheckPath: /health/live
     envVars:
       - key: NODE_VERSION
         value: 18.16.0

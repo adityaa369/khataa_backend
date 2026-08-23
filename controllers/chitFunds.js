@@ -222,54 +222,141 @@ exports.getBids = async (req, res) => {
 // @desc    Declare Winner (The Math happens here)
 // @route   POST /api/chitfunds/:id/declare-winner
 // @access  Private (Owner)
+const Money = require('../utils/money');
+const LedgerEntry = require('../models/LedgerEntry');
+const { withTransaction } = require('../utils/dbTransaction');
+
 exports.declareWinner = async (req, res) => {
     try {
         const { winnerUserId, winningDiscount } = req.body;
-        const chit = await ChitFund.findById(req.params.id);
-        if (chit.owner !== req.user.id) return res.status(403).json({ success: false, message: 'Not authorized' });
         
-        // --- CHIT MATH ---
-        const P = chit.totalValue;
-        const M = chit.totalMonths;
-        const D = winningDiscount;
-        const C = P * 0.05; // 5% Commission
-        
-        const netDividend = (D - C) / M;
-        const finalMonthlyInstallment = chit.monthlySubscription - netDividend;
-        const prizePayout = P - D;
-        
-        const auction = await ChitAuction.create({
-            chitFund: chit._id,
-            monthNumber: chit.activeAuctionMonth,
-            auctionDate: new Date(),
-            winnerUserId,
-            winningBidDiscount: D,
-            dividendPerMember: netDividend,
-            prizeMoneyPaid: prizePayout
+        if (winningDiscount === undefined || winningDiscount === null) {
+            return res.status(400).json({ success: false, message: 'Winning discount amount is required' });
+        }
+
+        const discountPaise = Money.toPaise(winningDiscount);
+        if (discountPaise < 0) return res.status(400).json({ success: false, message: 'Discount cannot be negative' });
+
+        const { auction, finalMonthlyInstallment, prizePayout } = await withTransaction(async (session) => {
+            const chit = await ChitFund.findById(req.params.id).session(session);
+            
+            if (!chit) throw new Error('CHIT_NOT_FOUND');
+            if (chit.owner !== req.user.id) throw new Error('UNAUTHORIZED');
+            if (chit.status === 'completed') throw new Error('CHIT_ALREADY_COMPLETED');
+            
+            // --- ATOMIC CHIT MATH (Integers / Paise) ---
+            const totalValuePaise = Money.toPaise(chit.totalValue);
+            const totalMonths = chit.totalMonths;
+            const commissionPaise = Math.floor((totalValuePaise * chit.commissionPercentage) / 100);
+            
+            // Dividend Pool = Discount - Organizer Commission
+            const dividendPoolPaise = Math.max(0, discountPaise - commissionPaise);
+            
+            // Count active subscribers (usually equals totalMonths)
+            const activeSubs = await ChitSubscription.find({ chitFund: chit._id, status: 'active' }).session(session);
+            const membersCount = activeSubs.length || 1;
+            
+            const dividendShares = Money.allocate(dividendPoolPaise, membersCount);
+            const dividendPerHeadPaise = dividendShares[0]; // Every member gets this share
+
+            const baseMonthlyPaise = Math.floor(totalValuePaise / totalMonths);
+            const netMonthlyPaise = Math.max(0, baseMonthlyPaise - dividendPerHeadPaise);
+            
+            const prizePayoutPaise = totalValuePaise - discountPaise;
+            
+            const auctionRecord = await ChitAuction.create([{
+                chitFund: chit._id,
+                monthNumber: chit.activeAuctionMonth,
+                auctionDate: new Date(),
+                winnerUserId,
+                winningBidDiscount: Money.toRupees(discountPaise),
+                dividendPerMember: Money.toRupees(dividendPerHeadPaise),
+                prizeMoneyPaid: Money.toRupees(prizePayoutPaise)
+            }], { session });
+            
+            const auction = auctionRecord[0];
+
+            // Verify winner is subscribed and hasn't won already
+            const winnerSub = activeSubs.find(s => s.user === winnerUserId);
+            if (!winnerSub) throw new Error('WINNER_NOT_SUBSCRIBED');
+            if (winnerSub.hasWonAuction) throw new Error('WINNER_ALREADY_WON');
+            
+            winnerSub.hasWonAuction = true;
+            winnerSub.wonMonth = chit.activeAuctionMonth;
+            
+            // Apply dividends and payments records to all members atomically
+            for (const sub of activeSubs) {
+                sub.totalDividendEarned = (sub.totalDividendEarned || 0) + Money.toRupees(dividendPerHeadPaise);
+                sub.paymentRecords.push({
+                    monthNumber: chit.activeAuctionMonth,
+                    isPaid: false
+                });
+                await sub.save({ session });
+            }
+
+            // Central Ledger Double-Entry Creation
+            const txId = require('crypto').randomUUID();
+            const idempotencyKeyStr = req.headers['x-idempotency-key'] || txId;
+
+            // 1. Credit Organizer Commission
+            await LedgerEntry.create([{
+                transactionId: txId,
+                account: 'SYSTEM:ORGANIZER_FEES',
+                type: 'CREDIT',
+                amountPaise: commissionPaise,
+                referenceModel: 'ChitGroup',
+                referenceId: chit._id,
+                idempotencyKey: idempotencyKeyStr + '_COMMISSION',
+                description: `Organizer commission for month ${chit.activeAuctionMonth}`
+            }], { session });
+
+            // 2. Credit Winner's Bank / Wallet with Prize Money
+            await LedgerEntry.create([{
+                transactionId: txId,
+                account: 'USER:' + winnerUserId,
+                type: 'CREDIT',
+                amountPaise: prizePayoutPaise,
+                referenceModel: 'ChitGroup',
+                referenceId: chit._id,
+                idempotencyKey: idempotencyKeyStr + '_PRIZE',
+                description: `Chit winner payout for month ${chit.activeAuctionMonth}`
+            }], { session });
+
+            // Increment chit month
+            chit.activeAuctionMonth += 1;
+            if (chit.activeAuctionMonth > chit.totalMonths) {
+                chit.status = 'completed';
+            }
+            await chit.save({ session });
+
+            return { 
+                auction, 
+                finalMonthlyInstallment: Money.toRupees(netMonthlyPaise), 
+                prizePayout: Money.toRupees(prizePayoutPaise) 
+            };
         });
 
-        // Mark winner
-        const sub = await ChitSubscription.findOne({ chitFund: chit._id, user: winnerUserId });
-        if (sub) {
-            sub.hasWonAuction = true;
-            sub.wonMonth = chit.activeAuctionMonth;
-            await sub.save();
-        }
-
-        chit.activeAuctionMonth += 1;
-        if (chit.activeAuctionMonth > chit.totalMonths) {
-            chit.status = 'completed';
-        }
-        await chit.save();
-
-        await cacheInvalidate(`chit:dashboard:${chit._id}`);
+        // Cache invalidate outside transaction
+        await cacheInvalidate(`chit:dashboard:${req.params.id}`);
+        
         res.status(200).json({ success: true, auction, finalMonthlyInstallment, prizePayout });
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-    }
-};
 
-// @desc    Get member detail (member's own view of a chit)
+    } catch (err) {
+        const errorMapping = {
+            'CHIT_NOT_FOUND': { status: 404, message: 'Chit fund not found' },
+            'UNAUTHORIZED': { status: 403, message: 'Only owner can declare winner' },
+            'CHIT_ALREADY_COMPLETED': { status: 400, message: 'Chit fund is already completed' },
+            'WINNER_NOT_SUBSCRIBED': { status: 400, message: 'Selected winner is not an active subscriber' },
+            'WINNER_ALREADY_WON': { status: 400, message: 'User has already won an auction in this chit fund' }
+        };
+
+        if (errorMapping[err.message]) {
+            return res.status(errorMapping[err.message].status).json({ success: false, message: errorMapping[err.message].message });
+        }
+        console.error('[Chit] Declare Winner Error:', err.message);
+        res.status(500).json({ success: false, message: 'Internal server error during settlement' });
+    }
+};// @desc    Get member detail (member's own view of a chit)
 // @route   GET /api/chitfunds/:id/member-detail
 // @access  Private
 exports.getMemberDetail = async (req, res) => {
@@ -477,117 +564,118 @@ exports.verifyMonthPayment = async (req, res) => {
 // @desc    Get full admin dashboard for a chit group
 // @route   GET /api/chitfunds/:id
 // @access  Private
+const AuthorizationService = require('../services/AuthorizationService');
+const { parsePagination } = require('../utils/pagination');
+const BidService = require('../services/BidService');
+
 exports.getChitDashboard = async (req, res) => {
     try {
         const chitId = req.params.id;
-        const cacheKey = `chit:dashboard:${chitId}`;
-        const cached = await cacheGet(cacheKey);
-        if (cached) return res.status(200).json(cached);
-
         const userId = req.user.id;
+        
         const chit = await ChitFund.findById(chitId);
         if (!chit) return res.status(404).json({ success: false, message: 'Chit fund not found' });
 
-        const isOwner = chit.owner === userId;
-        const subscriptions = await ChitSubscription.find({ chitFund: chitId });
-        const auctions = await ChitAuction.find({ chitFund: chitId }).sort({ monthNumber: 1 });
+        const isOwner = AuthorizationService.canManageChit(userId, chit);
+        const isMember = await AuthorizationService.canViewChit(userId, chitId);
+        
+        if (!isOwner && !isMember) {
+            return res.status(403).json({ success: false, message: 'Unauthorized access to Chit dashboard' });
+        }
 
-        // Enrich member data — match the exact shape the Flutter admin page reads
-        const members = await Promise.all(subscriptions.map(async (sub, index) => {
+        const cacheKey = `chit:dashboard:${chitId}:${userId}`; // Cache partitioned by user
+        const cached = await cacheGet(cacheKey);
+        if (cached) return res.status(200).json(cached);
+
+        const subscriptions = await ChitSubscription.find({ chitFund: chitId });
+        const auctions = await ChitAuction.find({ groupId: chitId }).sort({ cycleIndex: 1 });
+
+        // DTO Mapping: Remove sensitive PII unless viewed by owner
+        const ChitMemberSummary = await Promise.all(subscriptions.map(async (sub, index) => {
             const user = await User.findOne({ id: sub.user });
             const paymentRecords = sub.paymentRecords || [];
-            // Build paidMonths array for the Flutter page (it reads member['paidMonths'])
             const paidMonths = paymentRecords.filter(p => p.isPaid).map(p => p.monthNumber);
+            
+            // Mask phone numbers for non-owners
+            let phoneDisplay = '';
+            if (user && user.phone) {
+                phoneDisplay = isOwner || sub.user === userId ? user.phone : '******' + String(user.phone).slice(-4);
+            }
+
             return {
                 id: sub.user,
                 slotNumber: index + 1,
                 user: {
                     id: sub.user,
-                    firstName: user ? user.firstName : '',
-                    lastName: user ? user.lastName : '',
-                    phone: user ? user.phone : '',
+                    firstName: user ? user.firstName : 'Member',
+                    lastName: user ? (user.lastName ? user.lastName[0] + '.' : '') : '',
+                    phone: phoneDisplay,
                 },
                 status: sub.status,
                 hasWonAuction: sub.hasWonAuction || false,
                 wonMonth: sub.wonMonth || null,
-                paymentRecords,
-                paidMonths,
                 installmentsPaid: sub.installmentsPaid || paidMonths.length,
                 totalDividendEarned: sub.totalDividendEarned || 0,
             };
         }));
 
-        // Auction timeline shape for Flutter page (reads auctionTimeline)
-        const auctionTimeline = await Promise.all(auctions.map(async (auction) => {
-            let winnerName = '';
-            try {
-                const winner = await User.findOne({ id: auction.winnerUserId });
-                if (winner) winnerName = `${winner.firstName || ''} ${winner.lastName || ''}`.trim();
-            } catch (e) {}
-            return {
-                monthNumber: auction.monthNumber,
-                auctionDate: auction.auctionDate,
-                winnerUserId: auction.winnerUserId,
-                winnerName,
-                winningBidDiscount: auction.winningBidDiscount || 0,
-                prizeMoneyPaid: auction.prizeMoneyPaid || (chit.totalValue - (auction.winningBidDiscount || 0)),
-                dividendPerMember: auction.dividendPerMember || 0,
-            };
-        }));
-
-        // chitDetails shape for Flutter page
-        const chitDetails = {
-            id: chit._id.toString(),
-            name: chit.name,
-            totalValue: chit.totalValue,
-            totalMonths: chit.totalMonths,
-            monthlySubscription: chit.monthlySubscription,
-            commissionPercentage: chit.commissionPercentage || 5,
-            branchName: chit.branchName,
-            status: chit.status,
-            currentSubscribersCount: chit.currentSubscribersCount,
-            completedMonths: chit.completedMonths || 0,
-            activeAuctionMonth: chit.activeAuctionMonth || null,
-            startDate: chit.startDate,
-            owner: chit.owner,
-            isOwner,
-        };
-
-        const responseData = {
+        const responseDTO = {
             success: true,
-            chitDetails,
-            members,
-            auctionTimeline,
-            currentMonth: chit.activeAuctionMonth || (chit.completedMonths || 0) + 1,
-            completedMonths: chit.completedMonths || 0,
-            isOwner,
+            chit: {
+                id: chit._id,
+                name: chit.name,
+                totalValue: chit.totalValue,
+                totalMonths: chit.totalMonths,
+                monthlySubscription: chit.monthlySubscription,
+                status: chit.status,
+                activeAuctionMonth: chit.activeAuctionMonth,
+                isOwner: isOwner
+            },
+            members: ChitMemberSummary,
+            auctions: auctions.map(a => ({
+                cycleIndex: a.cycleIndex,
+                status: a.status,
+                winningBid: a.currentLowestBid ? Money.toRupees(a.currentLowestBid) : null,
+                winnerUser: a.currentWinner,
+                endTime: a.endTime
+            }))
         };
-        await cacheSet(cacheKey, responseData, 60);
-        return res.status(200).json(responseData);
+
+        await cacheSet(cacheKey, responseDTO, 60); // 1 minute cache
+        res.status(200).json(responseDTO);
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 };
 
-// @desc    Decline an invite
-// @route   POST /api/chitfunds/invites/:inviteId/decline
-// @access  Private
-exports.declineInvite = async (req, res) => {
+exports.submitBid = async (req, res) => {
     try {
-        const invite = await ChitInvite.findById(req.params.inviteId);
-        if (!invite) return res.status(404).json({ success: false, message: 'Invite not found' });
-        invite.status = 'declined';
-        await invite.save();
-        res.status(200).json({ success: true, message: 'Invite declined' });
+        const { discountAmount } = req.body;
+        const chit = await ChitFund.findById(req.params.id);
+        
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit not found' });
+        if (chit.status !== 'active') return res.status(400).json({ success: false, message: 'Chit is not active' });
+        
+        // Find the active auction for this chit
+        const auction = await ChitAuction.findOne({ groupId: chit._id, status: 'open' });
+        if (!auction) return res.status(400).json({ success: false, message: 'No open auction found for this chit' });
+
+        const bidDiscountPaise = Money.toPaise(discountAmount);
+        
+        // Delegate completely to domain service
+        const result = await BidService.placeBid({
+            auctionId: auction._id,
+            userId: req.user.id,
+            bidDiscountPaise: bidDiscountPaise,
+            idempotencyKey: req.headers['x-idempotency-key']
+        });
+
+        res.status(200).json(result);
     } catch (err) {
+        if (err.message.includes('UNAUTHORIZED')) return res.status(403).json({ success: false, message: err.message });
         res.status(500).json({ success: false, message: err.message });
     }
-};
-
-// @desc    Delete / cancel a chit fund (owner only, only if not yet started)
-// @route   DELETE /api/chitfunds/:id
-// @access  Private (Owner)
-exports.deleteChitFund = async (req, res) => {
+};exports.deleteChitFund = async (req, res) => {
     try {
         const chit = await ChitFund.findById(req.params.id);
         if (!chit) return res.status(404).json({ success: false, message: 'Chit fund not found' });
@@ -606,3 +694,6 @@ exports.deleteChitFund = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+
+
