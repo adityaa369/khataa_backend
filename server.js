@@ -19,7 +19,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
 };
 
-app.use(cors(corsOptions));
-
 const express = require('express');
 const app = express();
+
+app.use(cors(corsOptions));
