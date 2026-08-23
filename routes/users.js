@@ -1,6 +1,7 @@
 const express = require('express');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
+const { lookupLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
@@ -48,7 +49,7 @@ router.put('/profile', async (req, res) => {
 // @desc    Check if user exists by phone
 // @route   POST /api/users/check-phone
 // @access  Private
-router.post('/check-phone', async (req, res) => {
+router.post('/check-phone', lookupLimiter, async (req, res) => {
     try {
         const { phone } = req.body;
         if (!phone) {
@@ -96,3 +97,4 @@ router.post('/fcm-token', async (req, res) => {
 });
 
 module.exports = router;
+

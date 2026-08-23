@@ -1,43 +1,47 @@
 const { Server } = require('socket.io');
-const Redis = require('ioredis');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const ChitLedger = require('../models/ChitLedger');
-const ChitGroup = require('../models/ChitGroup');
+const ChitAuction = require('../models/ChitAuction');
+const BidService = require('../services/BidService');
+const Money = require('../utils/money');
+const AuthorizationService = require('../services/AuthorizationService');
+const RateLimitService = require('../services/RateLimitService');
 
-// We use an in-memory map or Redis for active timers. 
-// For single-node simplicity during dev, we can use an in-memory map, 
-// but we will prepare the Redis client as requested.
-let redisClient;
-try {
-    redisClient = new Redis(process.env.REDIS_URI || 'redis://127.0.0.1:6379');
-} catch (e) {
-    console.error('[AuctionEngine] Redis connection failed, falling back to memory if needed.', e);
-}
-
-const activeAuctions = {}; // In-memory fallback/cache
+    // Helper to re-verify authentication on sensitive events
+    // This prevents a long-lived socket from staying authorized after the 15m AT expires or the user logs out.
+    const verifySocketAuth = async (socket) => {
+        const token = socket.handshake.auth.token || socket.handshake.headers['authorization'];
+        if (!token) throw new Error('Authentication required');
+        
+        const actualToken = token.startsWith('Bearer ') ? token.split(' ')[1] : token;
+        
+        try {
+            const decoded = jwt.verify(actualToken, process.env.JWT_SECRET);
+            return decoded;
+        } catch (err) {
+            if (process.env.JWT_SECRET_PREVIOUS) {
+                return jwt.verify(actualToken, process.env.JWT_SECRET_PREVIOUS);
+            }
+            throw err;
+        }
+    };
 
 function initAuctionEngine(server) {
-    const io = new Server(server, {
-        cors: {
-            origin: process.env.NODE_ENV === 'production'
-                ? ['https://khataa-backend.onrender.com']
-                : ['http://localhost:3000', 'http://localhost:8080'],
-            credentials: true
-        }
-    });
+    let ioInstance;
+    const io = new Server(server, { cors: { credentials: true } });
 
-    // Auth middleware — runs before any connection is accepted
-    io.use(async (socket, next) => {
+        io.use(async (socket, next) => {
         try {
+            const ip = socket.handshake.address;
+            const key = RateLimitService.generateKey('ip', ip, 'ws_connect');
+            const { allowed } = await RateLimitService.consume(key, 20, 60, false); // Max 20 connections per minute per IP
+            if (!allowed) return next(new Error('Too many connection attempts'));
             const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.split(' ')[1];
-            if (!token) {
-                return next(new Error('Authentication required'));
-            }
+            if (!token) return next(new Error('Authentication required'));
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
             const user = await User.findOne({ id: decoded.id });
             if (!user) return next(new Error('User not found'));
-            socket.user = user; // attach user to socket
+            socket.user = user; 
             next();
         } catch (err) {
             next(new Error('Invalid token'));
@@ -45,118 +49,86 @@ function initAuctionEngine(server) {
     });
 
     io.on('connection', (socket) => {
-        console.log(`[Auction] Socket connected: ${socket.id}`);
-
-        // Join an auction room
-        socket.on('join_auction', async (data) => {
-            const { ledgerId } = data;
-            const userId = socket.user.id;
-            socket.join(ledgerId);
-            console.log(`[Auction] User ${userId} joined room ${ledgerId}`);
-
-            // Send current state
-            if (activeAuctions[ledgerId]) {
-                socket.emit('auction_sync', activeAuctions[ledgerId]);
-            } else {
-                // Check DB
-                try {
-                    const ledger = await ChitLedger.findById(ledgerId).populate('groupId');
-                    if (ledger && ledger.status === 'open') {
-                        activeAuctions[ledgerId] = {
-                            lowestBid: ledger.winningBidDiscount || ledger.groupId.totalValue * 0.4, // Max allowed bid initially
-                            winnerUser: null,
-                            endTime: new Date(ledger.auctionEndTime).getTime()
-                        };
-                        socket.emit('auction_sync', activeAuctions[ledgerId]);
-                    }
-                } catch (e) {
-                    console.error('[Auction] Sync error:', e);
-                }
-            }
-        });
-
-        // Handle incoming bids
-        socket.on('place_bid', async (data) => {
-            const { ledgerId, bidAmount } = data;
-            const userId = socket.user.id;
+                socket.on('join_auction', async (data) => {
+            const { auctionId } = data;
             
-            const auction = activeAuctions[ledgerId];
-            if (!auction) return; // Auction not active
+            try {
+                const auction = await ChitAuction.findById(auctionId);
+                if (!auction) return socket.emit('auction_error', { message: 'Auction not found' });
 
-            const now = Date.now();
-            if (now > auction.endTime) return; // Time expired
+                // P0: Authorization BEFORE joining the room
+                const canView = await AuthorizationService.canViewChit(socket.user.id, auction.groupId);
+                if (!canView) {
+                    return socket.emit('auction_error', { message: 'Unauthorized' });
+                }
 
-            // Core atomic logic: The bid must be lower than the current lowest bid
-            if (bidAmount < auction.lowestBid) {
-                auction.lowestBid = bidAmount;
-                auction.winnerUser = userId;
+                socket.join(auctionId);
                 
-                // Broadcast to all clients instantly
-                io.to(ledgerId).emit('bid_update', {
-                    lowestBid: bidAmount,
-                    winnerUser: userId,
-                    timestamp: now
-                });
+                if (auction.status === 'open') {
+                    socket.emit('auction_sync', {
+                        lowestBid: auction.currentLowestBid ? Money.toRupees(auction.currentLowestBid) : null,
+                        winnerUser: auction.currentWinner,
+                        endTime: new Date(auction.endTime).getTime()
+                    });
+                }
+            } catch (e) {
+                console.error('[AuctionSocket] Sync error:', e);
             }
         });
 
-        socket.on('disconnect', () => {
-            console.log(`[Auction] Socket disconnected: ${socket.id}`);
+                        socket.on('place_bid', async (data) => {
+            let userId;
+            try {
+                // Protocol Hardening: Re-verify authentication lifecycle dynamically
+                const decoded = await verifySocketAuth(socket);
+                userId = decoded.id;
+            } catch (err) {
+                socket.emit('error', { message: 'Session expired or revoked. Please reconnect.' });
+                socket.disconnect(true);
+                return;
+            }
+            
+            const { auctionId, bidAmount, idempotencyKey } = data;
+            
+            try {
+                // Tier 2: Bid Burst Protection
+                const key = RateLimitService.generateKey('user', userId, 'bid');
+                const { allowed } = await RateLimitService.consume(key, 10, 10, false); // 10 bids per 10s
+                if (!allowed) {
+                    return socket.emit('bid_error', { message: 'Rate limit exceeded, please slow down.' });
+                }
+                if (!bidAmount || isNaN(bidAmount) || bidAmount <= 0) return;
+                const bidDiscountPaise = Money.toPaise(bidAmount);
+
+                // Transport delegates purely to domain service
+                const result = await BidService.placeBid({ 
+                    auctionId, 
+                    userId, 
+                    bidDiscountPaise,
+                    idempotencyKey
+                });
+
+                if (result.success && !result.cached) {
+                    // Post-commit broadcast. If this fails, DB is still authoritative.
+                    io.to(auctionId).emit('bid_update', {
+                        lowestBid: Money.toRupees(result.auction.currentLowestBid),
+                        winnerUser: result.auction.currentWinner,
+                        timestamp: Date.now()
+                    });
+                }
+            } catch (err) {
+                // Return structured error to the specific socket that placed the bid
+                socket.emit('bid_error', { message: err.message });
+            }
         });
     });
-
-    // Background worker to check expired auctions and commit to DB
-    setInterval(async () => {
-        const now = Date.now();
-        for (const [ledgerId, auction] of Object.entries(activeAuctions)) {
-            if (now >= auction.endTime) {
-                // Auction ended! Lock state and commit.
-                const finalBid = auction.lowestBid;
-                const finalWinner = auction.winnerUser;
-                
-                delete activeAuctions[ledgerId]; // Remove from memory
-                io.to(ledgerId).emit('auction_ended', { winnerUser: finalWinner, lowestBid: finalBid });
-
-                try {
-                    const ledger = await ChitLedger.findById(ledgerId).populate('groupId');
-                    if (ledger && ledger.status === 'open') {
-                        ledger.status = 'processing_validation';
-                        ledger.winningBidDiscount = finalBid;
-                        ledger.winnerUser = finalWinner;
-
-                        // Phase 3: Mathematical Engine Lifecycle
-                        const group = ledger.groupId;
-                        const commission = (group.totalValue * group.commissionPercentage) / 100;
-                        ledger.commissionExtracted = commission;
-
-                        // Dividend Calculation
-                        // (Winning Bid Discount - Commission) / Members
-                        const dividendPool = finalBid - commission;
-                        const membersCount = group.maxSubscribers;
-                        
-                        let dividendPerHead = 0;
-                        let netPayable = (group.totalValue / group.durationMonths); // Base EMI
-
-                        if (dividendPool > 0) {
-                            dividendPerHead = Math.floor(dividendPool / membersCount);
-                        }
-
-                        netPayable = netPayable - dividendPerHead;
-
-                        ledger.dividendPerHead = dividendPerHead;
-                        ledger.netPayable = netPayable;
-
-                        await ledger.save();
-                        console.log(`[Auction] Committed Ledger ${ledgerId} -> Winner: ${finalWinner}, NetPayable: ${netPayable}`);
-                    }
-                } catch (e) {
-                    console.error('[Auction] Commit Error:', e);
-                }
-            }
-        }
-    }, 1000); // Check every second
 
     return io;
 }
 
-module.exports = initAuctionEngine;
+module.exports = { initAuctionEngine, getIo: () => ioInstance };
+
+
+
+
+

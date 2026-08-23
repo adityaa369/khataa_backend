@@ -1,4 +1,7 @@
 const express = require('express');
+// Override global console to enforce strict PII redaction across the entire app
+const logger = require('./utils/logger');
+global.console = { ...global.console, ...logger };
 const mongoose = require('mongoose');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -12,7 +15,16 @@ const http = require('http');
 
 dotenv.config();
 
+const { validateConfig } = require('./utils/configValidator');
+validateConfig(); // Fatally exit if required env vars are missing
+
+const { getRedisClient } = require('./utils/redisClient');
+
 const app = express();
+const requestCorrelation = require('./middleware/requestCorrelation');
+app.use(requestCorrelation);
+const { metricsMiddleware, getMetricsSnapshot } = require('./middleware/metrics');
+app.use(metricsMiddleware);
 
 // ─── Security Headers ───────────────────────────────────────────────────────
 app.use(helmet({
@@ -55,13 +67,57 @@ const authLimiter = rateLimit({
     skipSuccessfulRequests: true,
 });
 
+const financialKillSwitch = require('./middleware/financialKillSwitch');
+app.use(financialKillSwitch);
 app.use('/api', globalLimiter);
+const adminRoutes = require('./routes/admin');
+app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authLimiter);
+
+// ---------------- Readiness & Liveness ----------------
+let isShuttingDown = false;
+let isReady = false;
+
+app.get('/health/metrics', (req, res) => res.json(getMetricsSnapshot()));
+
+app.get('/health/live', (req, res) => {
+    res.status(200).send('OK');
+});
+
+app.get('/health/ready', async (req, res) => {
+    if (isShuttingDown || !isReady) {
+        return res.status(503).json({ status: 'UNAVAILABLE', reason: 'Shutting down or booting' });
+    }
+    
+    // Check MongoDB
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({ status: 'UNAVAILABLE', reason: 'MongoDB disconnected' });
+    }
+    
+    // Check Redis
+    try {
+        const redis = getRedisClient();
+        if (redis.status !== 'ready') throw new Error('Redis not ready');
+    } catch (e) {
+        return res.status(503).json({ status: 'UNAVAILABLE', reason: 'Redis disconnected' });
+    }
+    
+    res.status(200).json({ status: 'READY', memoryUsage: process.memoryUsage() });
+});
+
+// Reject new requests gracefully during shutdown
+app.use((req, res, next) => {
+    if (isShuttingDown) {
+        res.set('Connection', 'close');
+        return res.status(503).send('Server is in the process of restarting.');
+    }
+    next();
+});
 
 // ─── Body Parsing ───────────────────────────────────────────────────────────
 app.use(compression());
-app.use(bodyParser.json({ limit: '5mb' }));
-app.use(bodyParser.urlencoded({ limit: '5mb', extended: true }));
+app.use(bodyParser.json({ limit: '100kb' }));
+app.use(bodyParser.urlencoded({ limit: '100kb', extended: true }));
 
 // ─── NoSQL Injection & Parameter Pollution Protection ───────────────────────
 app.use(mongoSanitize()); // strips $, . from request body/params/query
@@ -149,28 +205,111 @@ app.use((err, req, res, next) => {
 const initAuctionEngine = require('./sockets/auctionEngine');
 
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGODB_URI;
 
-mongoose.connect(MONGO_URI)
-    .then(() => {
-        console.log('\n--- MongoDB Connection ---');
-        console.log('SUCCESS: Connected to MongoDB Atlas Cluster');
-        console.log('------------------------\n');
+let server;
 
-        const server = http.createServer(app);
+async function bootServer() {
+    try {
+        // Production Mongoose Connection Options
+        await mongoose.connect(process.env.MONGODB_URI, {
+            serverSelectionTimeoutMS: 5000, 
+            connectTimeoutMS: 10000,
+            maxPoolSize: 15, // Tuned for 4-8 PM2 workers to safely stay under Atlas free tier limit
+            socketTimeoutMS: 45000,
+            heartbeatFrequencyMS: 10000
+        });
+        console.log('[DB] MongoDB Connected for Production');
+
+        // Redis is initialized via utils/redisClient.js. Just wait for it to be ready structurally.
+        const redis = getRedisClient();
+        
+        server = http.createServer(app);
         
         // Initialize WebSockets for Live Auctions
+        const { initAuctionEngine, getIo } = require('./sockets/auctionEngine');
         initAuctionEngine(server);
 
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`\n--- Khaata Server Live ---`);
             console.log(`Port: ${PORT}`);
             console.log(`Mode: ${process.env.NODE_ENV || 'Development'}`);
-            console.log(`Local IP: http://localhost:${PORT}`);
             console.log(`WebSockets: Attached & Running`);
-            console.log(`-------------------------\n`);
+            
+            isReady = true;
+            if (process.send) {
+                process.send('ready'); // Signal to PM2 that we can accept traffic
+            }
         });
-    })
+
+    } catch (err) {
+        console.error('Fatal boot error:', err.message);
+        process.exit(1);
+    }
+}
+
+bootServer();
+
+// ---------------- Graceful Shutdown ----------------
+function gracefulShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n[SHUTDOWN] Received ${signal}. Draining traffic...`);
+
+    // 1. Stop accepting new Socket.IO connections and cleanly disconnect existing ones
+    try {
+        const { getIo } = require('./sockets/auctionEngine');
+        const io = getIo();
+        if (io) {
+            console.log('[SHUTDOWN] Terminating WebSocket connections safely...');
+            io.disconnectSockets(true); 
+            io.close();
+        }
+    } catch(e) {}
+
+    // 2. Stop new HTTP traffic and finish active ones
+    if (server) {
+        server.close(async () => {
+            console.log('[SHUTDOWN] HTTP server closed. Cleaning up databases...');
+            
+            // 3. Close Redis
+            try {
+                const redis = getRedisClient();
+                await redis.quit();
+                console.log('[SHUTDOWN] Redis connections closed.');
+            } catch(e) {}
+
+            // 4. Close MongoDB
+            try {
+                await mongoose.connection.close(false);
+                console.log('[SHUTDOWN] MongoDB connections closed.');
+            } catch(e) {}
+
+            console.log('[SHUTDOWN] Exit 0.');
+            process.exit(0);
+        });
+
+        // Fail-safe timeout
+        setTimeout(() => {
+            console.error('[SHUTDOWN] Forced exit after 10s timeout.');
+            process.exit(1);
+        }, 10000).unref();
+    } else {
+        process.exit(0);
+    }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught Exception:', err);
+    gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[FATAL] Unhandled Rejection:', reason);
+    gracefulShutdown('unhandledRejection');
+});)
     .catch(err => {
         console.error('\n--- MongoDB Connection ERROR ---');
         console.error('FAILED to connect to MongoDB Atlas.');
@@ -181,3 +320,11 @@ mongoose.connect(MONGO_URI)
         console.error('------------------------------\n');
         process.exit(1);
     });
+
+
+
+
+
+
+
+

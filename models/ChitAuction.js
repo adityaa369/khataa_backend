@@ -1,39 +1,42 @@
 const mongoose = require('mongoose');
 
+// Authoritative LIVE auction state
 const ChitAuctionSchema = new mongoose.Schema({
-    chitFund: {
+    groupId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'ChitFund',
-        required: true
+        ref: 'ChitGroup',
+        required: true,
+        index: true
     },
-    monthNumber: {
+    cycleIndex: {
         type: Number,
         required: true
     },
-    auctionDate: {
+    status: {
+        type: String,
+        enum: ['scheduled', 'open', 'closed'],
+        default: 'open'
+    },
+    currentLowestBid: {
+        type: Number, // In Paise
+        default: null
+    },
+    currentWinner: {
+        type: String, // User ID
+        ref: 'User',
+        default: null
+    },
+    startTime: {
         type: Date,
         required: true
     },
-    winnerUserId: {
-        type: String, // Matches custom User ID logic
-        ref: 'User',
+    endTime: {
+        type: Date,
         required: true
-    },
-    winningBidDiscount: {
-        type: Number,
-        required: [true, 'Winning discount amount is required']
-    },
-    dividendPerMember: {
-        type: Number,
-        required: true
-    },
-    prizeMoneyPaid: {
-        type: Number,
-        required: true,
-        comment: 'Total value minus discount minus organizer fee'
     }
-}, {
-    timestamps: true
-});
+}, { timestamps: true });
+
+// Prevent duplicate auctions for the same cycle
+ChitAuctionSchema.index({ groupId: 1, cycleIndex: 1 }, { unique: true });
 
 module.exports = mongoose.model('ChitAuction', ChitAuctionSchema);
