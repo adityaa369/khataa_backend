@@ -15,7 +15,7 @@ const cacheMiddleware = (keyPrefix, ttlSeconds = 300) => {
         try {
             // Generate unique cache key per user
             const userId = req.user.id;
-            const cacheKey = \\_\\;
+            const cacheKey = `${keyPrefix}_${userId}`;
             
             const cachedData = await client.get(cacheKey);
             if (cachedData) {
@@ -52,11 +52,11 @@ const invalidateUserCache = async (userId) => {
     if (!client || !isRedisAvailable()) return;
     try {
         const keys = [
-            \given_loans_\\,
-            \	aken_loans_\\
+            `given_loans_${userId}`,
+            `taken_loans_${userId}`
         ];
         await client.del(...keys);
-        console.log(\[Redis] Invalidated cache for user \\);
+        console.log(`[Redis] Invalidated cache for user ${userId}`);
     } catch (error) {
         console.error('[Redis] Invalidation error:', error.message);
     }
