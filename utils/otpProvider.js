@@ -35,7 +35,7 @@ const verifyFirebaseToken = async (idToken) => {
 /**
  * Mock sendOtp fallback
  * Firebase Phone Auth cannot be triggered from the backend to send custom SMS.
- * To prevent the app from crashing while MSG91 is removed, this mock returns true.
+ * This mock is kept for local testing purposes to print the OTP.
  */
 const sendOtp = async (phone, otp) => {
     if (process.env.NODE_ENV !== 'production') {

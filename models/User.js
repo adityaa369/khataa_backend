@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const EncryptionUtil = require('../utils/encryption');
 
 const UserSchema = new mongoose.Schema({
     id: {
@@ -50,9 +51,37 @@ const UserSchema = new mongoose.Schema({
     fcmToken: {
         type: String,
         required: false
+    },
+    passwordResetToken: {
+        type: String,
+        select: false
+    },
+    passwordResetExpires: {
+        type: Date,
+        select: false
     }
-}, {
-    timestamps: true
+}, { timestamps: true });
+
+// Encrypt highly sensitive PII before saving
+UserSchema.pre('save', function(next) {
+    if (this.isModified('pan') && this.pan && !this.pan.includes(':')) {
+        this.pan = EncryptionUtil.encrypt(this.pan);
+    }
+    if (this.isModified('aadhar') && this.aadhar && !this.aadhar.includes(':')) {
+        this.aadhar = EncryptionUtil.encrypt(this.aadhar);
+    }
+    next();
 });
 
+// Decrypt on retrieve (Helper method, as Mongoose lean() bypasses getters)
+UserSchema.methods.getDecryptedKyc = function() {
+    return {
+        pan: EncryptionUtil.decrypt(this.pan),
+        aadhar: EncryptionUtil.decrypt(this.aadhar)
+    };
+};
+
 module.exports = mongoose.model('User', UserSchema);
+
+
+
