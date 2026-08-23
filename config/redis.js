@@ -71,7 +71,7 @@ async function connectRedisStrict() {
     const response = await client.ping();
 
     if (response !== 'PONG') {
-      throw new Error(Unexpected Redis PING response: );
+      throw new Error(`Unexpected Redis PING response: ${response}`);
     }
 
     redisAvailable = true;
