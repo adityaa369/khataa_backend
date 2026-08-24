@@ -14,6 +14,7 @@ const requireIdempotency = async (req, res, next) => {
 
     try {
         let record;
+        let isNewRecord = false;
         try {
             record = await IdempotencyKey.create({
                 key: key,
@@ -21,6 +22,7 @@ const requireIdempotency = async (req, res, next) => {
                 requestPath: req.originalUrl,
                 status: 'IN_PROGRESS'
             });
+            isNewRecord = true;
         } catch (err) {
             if (err.code === 11000) {
                 record = await IdempotencyKey.findOne({ key, user: userId });
@@ -55,7 +57,7 @@ const requireIdempotency = async (req, res, next) => {
             return res.status(record.responseStatus || 200).json(record.responseBody);
         }
 
-        if (record.status === 'IN_PROGRESS' && record._id.toString() !== (req.idempotencyRecordId || '')) {
+        if (!isNewRecord && record.status === 'IN_PROGRESS' && record._id.toString() !== (req.idempotencyRecordId || '')) {
             return res.status(409).json({ success: false, message: 'A transaction with this idempotency key is already in progress. Please wait.' });
         }
 
@@ -79,3 +81,4 @@ const requireIdempotency = async (req, res, next) => {
 };
 
 module.exports = { requireIdempotency };
+
