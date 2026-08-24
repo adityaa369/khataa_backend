@@ -14,7 +14,7 @@ router.put('/incidents/:id/status', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FIN
 
 router.get('/financial/overview', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getFinancialOverview);
 router.get('/financial/transactions', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getTransactions);
-router.get('/financial/loans', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getLoans);
+router.get('/financial/loans/list', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getLoans);
 
 
 const { getChitOverview, getChits, getChitDetail } = require('../controllers/adminChits');
@@ -83,6 +83,7 @@ router.get('/financial/ledger', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE
 router.get('/financial/idempotency', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getIdempotencyMetrics);
 
 module.exports = router;
+
 
 
 
