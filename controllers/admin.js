@@ -64,11 +64,26 @@ exports.getDashboard = async (req, res) => {
             redisStatus = 'DISCONNECTED';
         }
     }
-    const redisLatency = Number(process.hrtime.bigint() - redisStart) / 1e6;
+        const redisLatency = Number(process.hrtime.bigint() - redisStart) / 1e6;
+
+    const os = require('os');
+    const { getIo } = require('../sockets/auctionEngine');
+    const io = getIo();
+    const wsConnections = io && io.engine ? io.engine.clientsCount : 0;
 
     const infrastructure = {
         database: { status: dbStatus, latencyMs: Math.round(dbLatency) },
-        redis: { status: redisStatus, latencyMs: Math.round(redisLatency) }
+        redis: { status: redisStatus, latencyMs: Math.round(redisLatency) },
+        server: {
+            cpuCount: os.cpus().length,
+            loadAvg: os.loadavg(),
+            memory: process.memoryUsage(),
+            uptime: process.uptime(),
+            pm2Workers: process.env.instances || 1
+        },
+        websockets: {
+            activeConnections: wsConnections
+        }
     };
     res.status(200).json({
         success: true,
@@ -167,6 +182,7 @@ exports.getLoans = async (req, res) => {
     ]);
     res.status(200).json({ success: true, data: loans, summary });
 };
+
 
 
 

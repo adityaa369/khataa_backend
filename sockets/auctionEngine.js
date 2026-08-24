@@ -1,4 +1,4 @@
-const { Server } = require('socket.io');
+﻿const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const ChitAuction = require('../models/ChitAuction');
@@ -29,6 +29,7 @@ const RateLimitService = require('../services/RateLimitService');
 function initAuctionEngine(server) {
     let ioInstance;
     const io = new Server(server, { cors: { credentials: true } });
+    ioInstance = io;
 
         io.use(async (socket, next) => {
         try {
@@ -127,6 +128,7 @@ function initAuctionEngine(server) {
 }
 
 module.exports = { initAuctionEngine, getIo: () => ioInstance };
+
 
 
 
