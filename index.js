@@ -56,15 +56,25 @@ const globalLimiter = rateLimit({
     message: { success: false, message: 'Too many requests, please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
+    handler: (req, res, next, options) => {
+        const { triggerAlert } = require('./utils/telemetry');
+        triggerAlert('RATE_LIMIT_EXCEEDED', 'MEDIUM', { key: 'global_api_limit', ip: req.ip, originalUrl: req.originalUrl, source: 'EXPRESS_RATE_LIMIT' });
+        res.status(options.statusCode).json(options.message);
+    }
 });
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 5, // 20 auth attempts per 15 min
+    max: 5,
     message: { success: false, message: 'Too many authentication attempts, please wait.' },
     standardHeaders: true,
     legacyHeaders: false,
     skipSuccessfulRequests: true,
+    handler: (req, res, next, options) => {
+        const { triggerAlert } = require('./utils/telemetry');
+        triggerAlert('RATE_LIMIT_EXCEEDED', 'MEDIUM', { key: 'auth_api_limit', ip: req.ip, originalUrl: req.originalUrl, source: 'EXPRESS_RATE_LIMIT' });
+        res.status(options.statusCode).json(options.message);
+    }
 });
 
 const financialKillSwitch = require('./middleware/financialKillSwitch');
@@ -318,6 +328,9 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[FATAL] Unhandled Rejection:', reason);
     gracefulShutdown('unhandledRejection');
 });
+
+
+
 
 
 
