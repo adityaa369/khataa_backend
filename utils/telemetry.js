@@ -77,11 +77,12 @@ const triggerAlert = (alertName, severity, context) => {
             financialImpact = 'COMMITTED';
             reachedFinancialLogic = true;
         } else if (alertName === 'FINANCIAL_KILL_SWITCH_BLOCKED') {
-            financialImpact = 'BLOCKED';
+            financialImpact = 'NONE';
             reachedFinancialLogic = false;
         }
 
         let result = 'FAILED';
+        if (alertName === 'KILL_SWITCH_ACTIVATED' || alertName === 'KILL_SWITCH_DEACTIVATED') result = 'SUCCESS';
         if (alertName.includes('ATTEMPT') || alertName.includes('BLOCKED') || alertName.includes('EXCEEDED')) result = 'BLOCKED';
         
         SecurityEvent.create({
@@ -102,3 +103,4 @@ const triggerAlert = (alertName, severity, context) => {
 };
 
 module.exports = { trackFinancialEvent, triggerAlert };
+

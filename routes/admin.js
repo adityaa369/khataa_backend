@@ -54,9 +54,11 @@ const { getAdmins, getAuditLogs, toggleKillSwitch, getKillSwitchStatus } = requi
 router.get('/system/admins', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getAdmins);
 router.get('/system/audit', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getAuditLogs);
 
-// L-SEC-001 to L-SEC-006: Strict Role & MFA checking for Kill Switch
-router.get('/controls/kill-switch', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getKillSwitchStatus);
-router.post('/controls/kill-switch', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), requireMFA, toggleKillSwitch);
+const { getKillSwitch, activateKillSwitch, deactivateKillSwitch, getHistory } = require('../controllers/adminKillSwitch');
+router.get('/kill-switch', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getKillSwitch);
+router.post('/kill-switch/activate', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), activateKillSwitch);
+router.post('/kill-switch/deactivate', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), deactivateKillSwitch);
+router.get('/kill-switch/history', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getHistory);
 
 
 const { getTestLabStatus, runScenario, cleanupTestRun } = require('../controllers/adminTestLab');
@@ -73,4 +75,5 @@ const { getProductionReadiness } = require('../controllers/adminReadiness');
 router.get('/system/readiness', requireRole('SUPER_ADMIN'), requireMFA, getProductionReadiness);
 
 module.exports = router;
+
 
