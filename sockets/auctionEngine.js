@@ -26,8 +26,8 @@ const RateLimitService = require('../services/RateLimitService');
         }
     };
 
+let ioInstance;
 function initAuctionEngine(server) {
-    let ioInstance;
     const io = new Server(server, { cors: { credentials: true } });
     ioInstance = io;
 
@@ -128,6 +128,7 @@ function initAuctionEngine(server) {
 }
 
 module.exports = { initAuctionEngine, getIo: () => ioInstance };
+
 
 
 
