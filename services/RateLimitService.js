@@ -1,7 +1,6 @@
 ﻿const redis = require('../utils/redisClient');
 const logger = require('../utils/logger');
 const { triggerAlert } = require('../utils/telemetry');
-const { triggerAlert } = require('../utils/telemetry');
 
 class RateLimitService {
     /**
@@ -40,6 +39,7 @@ class RateLimitService {
 
             if (!allowed) {
                 logger.warn(`[SecurityEvent] RATE_LIMIT_EXCEEDED: Key ${key}`);
+                triggerAlert('RATE_LIMIT_EXCEEDED', 'MEDIUM', { key });
             }
 
             return {
@@ -63,5 +63,3 @@ class RateLimitService {
 }
 
 module.exports = RateLimitService;
-
-
