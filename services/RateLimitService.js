@@ -39,7 +39,7 @@ class RateLimitService {
 
             if (!allowed) {
                 logger.warn(`[SecurityEvent] RATE_LIMIT_EXCEEDED: Key ${key}`);
-                triggerAlert('RATE_LIMIT_EXCEEDED', 'MEDIUM', { key });
+                triggerAlert('RATE_LIMIT_EXCEEDED', 'MEDIUM', { key, source: 'RATE_LIMIT_SERVICE' });
             }
 
             return {
@@ -63,3 +63,4 @@ class RateLimitService {
 }
 
 module.exports = RateLimitService;
+
