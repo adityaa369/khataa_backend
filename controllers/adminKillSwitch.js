@@ -49,7 +49,7 @@ exports.activateKillSwitch = async (req, res) => {
 
     const isValidMfa = await verifyMFA(adminId, mfaToken);
     if (!isValidMfa) {
-        triggerAlert('ADMIN_MFA_FAILURE', 'HIGH', { action: 'ACTIVATE_KILL_SWITCH', adminId });
+        triggerAlert('ADMIN_MFA_FAILURE', 'HIGH', { action: 'ACTIVATE_KILL_SWITCH', admin: adminId });
         return res.status(403).json({ success: false, message: 'Invalid or missing MFA token' });
     }
 
@@ -82,7 +82,7 @@ exports.activateKillSwitch = async (req, res) => {
         }
 
         // Emit Immutable Audit Event
-        triggerAlert('KILL_SWITCH_ACTIVATED', 'CRITICAL', { reason: reason.trim() }, adminId);
+        triggerAlert('KILL_SWITCH_ACTIVATED', 'CRITICAL', { reason: reason.trim(), admin: adminId });
 
         // Update Cache
         await updateCache(true);
@@ -103,7 +103,7 @@ exports.deactivateKillSwitch = async (req, res) => {
 
     const isValidMfa = await verifyMFA(adminId, mfaToken);
     if (!isValidMfa) {
-        triggerAlert('ADMIN_MFA_FAILURE', 'HIGH', { action: 'DEACTIVATE_KILL_SWITCH', adminId });
+        triggerAlert('ADMIN_MFA_FAILURE', 'HIGH', { action: 'DEACTIVATE_KILL_SWITCH', admin: adminId });
         return res.status(403).json({ success: false, message: 'Invalid or missing MFA token' });
     }
 
@@ -133,7 +133,7 @@ exports.deactivateKillSwitch = async (req, res) => {
         }
 
         // Emit Immutable Audit Event
-        triggerAlert('KILL_SWITCH_DEACTIVATED', 'HIGH', { reason: reason.trim() }, adminId);
+        triggerAlert('KILL_SWITCH_DEACTIVATED', 'HIGH', { reason: reason.trim(), admin: adminId });
 
         // Update Cache
         await updateCache(false);
@@ -156,5 +156,6 @@ exports.getHistory = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to fetch history' });
     }
 };
+
 
 
