@@ -1,4 +1,7 @@
-const IdempotencyKey = require('../models/IdempotencyKey');
+﻿const IdempotencyKey = require('../models/IdempotencyKey');
+const crypto = require('crypto');
+const { triggerAlert } = require('../utils/telemetry');
+const { metrics } = require('./metrics');
 
 const requireIdempotency = async (req, res, next) => {
     const key = req.headers['x-idempotency-key'];
@@ -31,6 +34,24 @@ const requireIdempotency = async (req, res, next) => {
 
         if (record.status === 'COMPLETED') {
             console.log(`[Idempotency] Returning cached response for key: ${key}`);
+            
+            // Increment process memory metric
+            metrics.financial.idempotencyReplays++;
+            
+            // Persist telemetry hook asynchronously, never breaking the flow
+            try {
+                const keyHash = crypto.createHash('sha256').update(key).digest('hex');
+                const actorId = req.user ? req.user.id : (req.admin ? req.admin._id : 'anonymous');
+                triggerAlert('IDEMPOTENCY_REPLAY', 'LOW', { 
+                    idempotencyKeyHash: keyHash, 
+                    path: req.originalUrl,
+                    actorId: actorId,
+                    reason: 'cached_response_replay'
+                });
+            } catch (e) {
+                // Ignore telemetry failure to protect the functional idempotency flow
+            }
+
             return res.status(record.responseStatus || 200).json(record.responseBody);
         }
 
