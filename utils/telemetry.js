@@ -66,7 +66,19 @@ const triggerAlert = (alertName, severity, context) => {
 
     // Persist to SecurityEvent structured store
     try {
-        const actorId = context.user || context.admin || context.actorId || undefined;
+        let resolvedActorType = 'ANONYMOUS';
+        let resolvedActorId = undefined;
+
+        if (context.admin) {
+            resolvedActorType = 'ADMIN';
+            resolvedActorId = context.admin;
+        } else if (context.user) {
+            resolvedActorType = 'USER';
+            resolvedActorId = context.user;
+        } else if (context.actorId) {
+            resolvedActorType = String(context.actorId).startsWith('ADMIN') ? 'ADMIN' : 'USER';
+            resolvedActorId = context.actorId;
+        }
         let financialImpact = 'NONE';
         let reachedFinancialLogic = false;
 
@@ -89,8 +101,8 @@ const triggerAlert = (alertName, severity, context) => {
             eventId: crypto.randomUUID(),
             eventType: alertName,
             severity,
-            actorType: actorId ? 'USER' : 'ANONYMOUS',
-            actorId: actorId,
+            actorType: resolvedActorType,
+            actorId: resolvedActorId,
             requestId,
             ipReference: context.ip || undefined,
             route: context.path || undefined,
@@ -103,4 +115,5 @@ const triggerAlert = (alertName, severity, context) => {
 };
 
 module.exports = { trackFinancialEvent, triggerAlert };
+
 
