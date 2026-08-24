@@ -21,6 +21,7 @@ validateConfig(); // Fatally exit if required env vars are missing
 const redisClient = require('./utils/redisClient');
 
 const app = express();
+app.set('trust proxy', 1);
 const requestCorrelation = require('./middleware/requestCorrelation');
 app.use(requestCorrelation);
 const { metricsMiddleware, getMetricsSnapshot } = require('./middleware/metrics');
@@ -328,6 +329,7 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[FATAL] Unhandled Rejection:', reason);
     gracefulShutdown('unhandledRejection');
 });
+
 
 
 

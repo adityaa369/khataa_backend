@@ -67,9 +67,14 @@ exports.getDashboard = async (req, res) => {
         const redisLatency = Number(process.hrtime.bigint() - redisStart) / 1e6;
 
     const os = require('os');
-    const { getIo } = require('../sockets/auctionEngine');
-    const io = getIo();
-    const wsConnections = io && io.engine ? io.engine.clientsCount : 0;
+    let wsConnections = 'UNKNOWN';
+    try {
+        const { getIo } = require('../sockets/auctionEngine');
+        const io = getIo();
+        wsConnections = io && io.engine ? io.engine.clientsCount : 0;
+    } catch (e) {
+        console.error('[Admin] Failed to fetch WebSocket metrics:', e.message);
+    }
 
     const infrastructure = {
         database: { status: dbStatus, latencyMs: Math.round(dbLatency) },
@@ -182,6 +187,7 @@ exports.getLoans = async (req, res) => {
     ]);
     res.status(200).json({ success: true, data: loans, summary });
 };
+
 
 
 
