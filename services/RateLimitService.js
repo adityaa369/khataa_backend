@@ -1,5 +1,7 @@
-const redis = require('../utils/redisClient');
+﻿const redis = require('../utils/redisClient');
 const logger = require('../utils/logger');
+const { triggerAlert } = require('../utils/telemetry');
+const { triggerAlert } = require('../utils/telemetry');
 
 class RateLimitService {
     /**
@@ -61,3 +63,5 @@ class RateLimitService {
 }
 
 module.exports = RateLimitService;
+
+

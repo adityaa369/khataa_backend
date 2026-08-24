@@ -1,5 +1,6 @@
-const OtpChallenge = require('../models/OtpChallenge');
+﻿const OtpChallenge = require('../models/OtpChallenge');
 const axios = require('axios');
+const { triggerAlert } = require('../utils/telemetry');
 
 class OtpService {
     /**
@@ -28,8 +29,10 @@ class OtpService {
                 // Duplicate key -> The verificationId was already used or is currently processing!
                 const existing = await OtpChallenge.findOne({ challengeId: verificationId });
                 if (existing && existing.purpose !== purpose) {
+                    triggerAlert('OTP_PURPOSE_MISMATCH', 'HIGH', { userId, purpose, resourceId, expectedAmountPaise });
                     throw new Error('OTP_PURPOSE_MISMATCH');
                 }
+                triggerAlert('OTP_REPLAY', 'HIGH', { userId, purpose, resourceId, expectedAmountPaise });
                 throw new Error('OTP_REPLAY_REJECTED');
             }
             throw err;
@@ -80,3 +83,4 @@ class OtpService {
 }
 
 module.exports = OtpService;
+
