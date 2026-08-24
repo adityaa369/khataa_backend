@@ -54,6 +54,7 @@ const { getAdmins, getAuditLogs, toggleKillSwitch, getKillSwitchStatus } = requi
 router.get('/system/admins', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getAdmins);
 router.get('/system/audit', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getAuditLogs);
 
+const { getPaymentsOverview, getLoansOverview, getLedgerReconciliation, getIdempotencyMetrics } = require('../controllers/adminFinancialExplorer');
 const { getKillSwitch, activateKillSwitch, deactivateKillSwitch, getHistory } = require('../controllers/adminKillSwitch');
 router.get('/kill-switch', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getKillSwitch);
 router.post('/kill-switch/activate', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), activateKillSwitch);
@@ -74,6 +75,14 @@ router.post('/security/adversarial-audit', requireRole('SUPER_ADMIN'), requireMF
 const { getProductionReadiness } = require('../controllers/adminReadiness');
 router.get('/system/readiness', requireRole('SUPER_ADMIN'), requireMFA, getProductionReadiness);
 
+
+// E.7 Financial Explorer (Read-Only)
+router.get('/financial/payments', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getPaymentsOverview);
+router.get('/financial/loans', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getLoansOverview);
+router.get('/financial/ledger', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getLedgerReconciliation);
+router.get('/financial/idempotency', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getIdempotencyMetrics);
+
 module.exports = router;
+
 
 
