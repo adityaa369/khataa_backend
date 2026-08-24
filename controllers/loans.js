@@ -1,4 +1,4 @@
-const Notification = require('../models/Notification');
+﻿const Notification = require('../models/Notification');
 const Loan = require('../models/Loan');
 const User = require('../models/User');
 const { sendOtp } = require('../utils/otpProvider');
@@ -161,11 +161,11 @@ exports.createLoan = async (req, res) => {
         // Send FCM alert telling borrower setup has been initiated
         if (borrower.fcmToken) {
             const { sendPushNotification } = require('../utils/fcm');
-            Notification.create({ userId: borrower._id, title: 'Lender Setup Verification', body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`, data: { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() } }).catch(err => console.log('Notification DB Error', err));
+            Notification.create({ userId: borrower._id, title: 'Lender Setup Verification', body: `A credit agreement setup for â‚¹${amount} has been initiated by ${lenderName}.`, data: { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() } }).catch(err => console.log('Notification DB Error', err));
             sendPushNotification(
                 borrower.fcmToken,
                 'Lender Setup Verification',
-                `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
+                `A credit agreement setup for â‚¹${amount} has been initiated by ${lenderName}.`,
                 { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() }
             ).catch(fcmErr => {
                 console.error('[Loans] FCM init setup push notification failed:', fcmErr.message);
@@ -461,7 +461,7 @@ exports.updateProgress = async (req, res) => {
                 sendPushNotification(
                     borrowerUser.fcmToken,
                     'Loan Progress Updated',
-                    `Your lender has updated the repayment progress for your loan of ₹${loan.amount}.`,
+                    `Your lender has updated the repayment progress for your loan of â‚¹${loan.amount}.`,
                     { type: 'LOAN_PROGRESS_UPDATED', loanId: loan._id.toString() }
                 ).catch(err => console.error('[Loans] FCM updateProgress notification failed:', err.message));
             }
@@ -526,7 +526,7 @@ exports.verifyLenderOtp = async (req, res) => {
             sendPushNotification(
                 borrowerUser.fcmToken,
                 'New Agreement Request',
-                `${req.user.firstName || 'Someone'} has confirmed sending you a loan out for ₹${loan.amount}. Tap to review and accept via Digital Signature.`,
+                `${req.user.firstName || 'Someone'} has confirmed sending you a loan out for â‚¹${loan.amount}. Tap to review and accept via Digital Signature.`,
                 { type: 'LOAN_CREATED', loanId: loan._id.toString() }
             ).catch(err => console.error('[Loans] FCM verifyLenderOtp notification failed:', err.message));
         }
@@ -604,7 +604,7 @@ exports.closeLoan = async (req, res) => {
             if (borrowerUserEmail && borrowerUserEmail.email) {
                 await sendEmail({
                     to: borrowerUserEmail.email,
-                    subject: `Credit Agreement Closed — ₹${loan.amount.toLocaleString('en-IN')}`,
+                    subject: `Credit Agreement Closed â€” â‚¹${loan.amount.toLocaleString('en-IN')}`,
                     html: loanClosedTemplate({
                         borrowerName: `${borrowerUserEmail.firstName || ''} ${borrowerUserEmail.lastName || ''}`.trim() || borrowerUserEmail.phone,
                         lenderName: req.user ? `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() : 'Your Lender',
@@ -626,7 +626,7 @@ exports.closeLoan = async (req, res) => {
             sendPushNotification(
                 req.user.fcmToken,
                 'Agreement Closed',
-                `The loan agreement for ₹${loan.amount} has been successfully closed.`,
+                `The loan agreement for â‚¹${loan.amount} has been successfully closed.`,
                 { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
             ).catch(err => console.error('[Loans] FCM Lender close notification failed:', err.message));
         }
@@ -636,7 +636,7 @@ exports.closeLoan = async (req, res) => {
             sendPushNotification(
                 borrowerUser.fcmToken,
                 'Agreement Closed',
-                `Your loan agreement for ₹${loan.amount} has been successfully closed.`,
+                `Your loan agreement for â‚¹${loan.amount} has been successfully closed.`,
                 { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
             ).catch(err => console.error('[Loans] FCM Borrower close notification failed:', err.message));
         }
@@ -659,7 +659,7 @@ exports.uploadDocument = async (req, res) => {
         const ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png'];
         const ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
         
-        // Sanitize filename — strip directory traversal, allow only safe chars
+        // Sanitize filename â€” strip directory traversal, allow only safe chars
         const sanitizedName = (fileName || 'document')
             .replace(/[^a-zA-Z0-9._\-]/g, '_')
             .replace(/\.\./g, '')
@@ -736,7 +736,7 @@ exports.uploadDocument = async (req, res) => {
     }
 };
 
-// ─── Custom Payment Transactions ──────────────────────────────────────────
+// â”€â”€â”€ Custom Payment Transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function _handleCustomTransaction(req, res, actionType) {
     try {
@@ -755,7 +755,7 @@ async function _handleCustomTransaction(req, res, actionType) {
 
             if (actionType === 'recordPayment' || actionType === 'recordInterest') {
                 if (amount > currentLoan.totalPayable || amountPaise > currentLoan.totalPayablePaise) {
-                    triggerAlert('OVERPAYMENT_ATTEMPT', 'CRITICAL', { actionType, amountPaise });
+                    triggerAlert('OVERPAYMENT_ATTEMPT', 'CRITICAL', { actionType, amountPaise, loanId: id });
                     metrics.financial.paymentsRejected++;
                     throw new Error('OVERPAYMENT_PROHIBITED');
                 }
@@ -834,3 +834,4 @@ async function _handleCustomTransaction(req, res, actionType) {
 exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'recordPayment');
 exports.addCredit = (req, res) => _handleCustomTransaction(req, res, 'addCredit');
 exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');
+
