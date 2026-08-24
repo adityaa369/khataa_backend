@@ -1,5 +1,6 @@
-// utils/telemetry.js
-const { getTraceContext } = require('./asyncContext');
+﻿const { getTraceContext } = require('./asyncContext');
+const SecurityEvent = require('../models/SecurityEvent');
+const crypto = require('crypto');
 
 const trackFinancialEvent = (event, payload) => {
     const { requestId, userId } = getTraceContext();
@@ -18,6 +19,32 @@ const trackFinancialEvent = (event, payload) => {
     } else {
         console.log(`[FINANCIAL] ${event} | User: ${userId} | ${JSON.stringify(payload)}`);
     }
+
+    // Persist as an observability audit event in the background
+    // (We treat some financial events as security/audit events if they have impact)
+    const severityMap = {
+        'LOAN_PAYMENT_STARTED': 'MEDIUM',
+        'LOAN_PAYMENT_COMMITTED': 'HIGH',
+        'LOAN_CREATED': 'HIGH',
+        'LOAN_ACCEPTED': 'MEDIUM'
+    };
+    
+    if (severityMap[event]) {
+        try {
+            SecurityEvent.create({
+                eventId: crypto.randomUUID(),
+                eventType: event,
+                severity: severityMap[event],
+                actorType: userId ? 'USER' : 'SYSTEM',
+                actorId: userId,
+                requestId,
+                result: 'SUCCESS',
+                financialImpact: event.includes('COMMITTED') || event.includes('CREATED') ? 'COMMITTED' : (event.includes('STARTED') ? 'ATTEMPTED' : 'NONE'),
+                reachedFinancialLogic: true,
+                metadata: payload
+            }).catch(e => { /* Ignore persistence error to prevent affecting main flow */ });
+        } catch(e) {}
+    }
 };
 
 const triggerAlert = (alertName, severity, context) => {
@@ -34,8 +61,44 @@ const triggerAlert = (alertName, severity, context) => {
     if (process.env.NODE_ENV === 'production') {
         process.stdout.write(JSON.stringify(alertEntry) + '\n');
     } else {
-        console.error(`\n?? [ALERT] [${severity}] ${alertName} | ${JSON.stringify(context)}\n`);
+        console.error(`\n🔴 [ALERT] [${severity}] ${alertName} | ${JSON.stringify(context)}\n`);
     }
+
+    // Persist to SecurityEvent structured store
+    try {
+        const actorId = context.user || context.admin || context.actorId || undefined;
+        let financialImpact = 'NONE';
+        let reachedFinancialLogic = false;
+
+        if (alertName === 'OVERPAYMENT_ATTEMPT') {
+            financialImpact = 'ATTEMPTED';
+            reachedFinancialLogic = true;
+        } else if (alertName.includes('FINANCIAL_CORRUPTION') || alertName.includes('MISMATCH')) {
+            financialImpact = 'COMMITTED';
+            reachedFinancialLogic = true;
+        } else if (alertName === 'FINANCIAL_KILL_SWITCH_BLOCKED') {
+            financialImpact = 'BLOCKED';
+            reachedFinancialLogic = false;
+        }
+
+        let result = 'FAILED';
+        if (alertName.includes('ATTEMPT') || alertName.includes('BLOCKED') || alertName.includes('EXCEEDED')) result = 'BLOCKED';
+        
+        SecurityEvent.create({
+            eventId: crypto.randomUUID(),
+            eventType: alertName,
+            severity,
+            actorType: actorId ? 'USER' : 'ANONYMOUS',
+            actorId: actorId,
+            requestId,
+            ipReference: context.ip || undefined,
+            route: context.path || undefined,
+            result,
+            financialImpact,
+            reachedFinancialLogic,
+            metadata: context
+        }).catch(e => {});
+    } catch(e) {}
 };
 
 module.exports = { trackFinancialEvent, triggerAlert };

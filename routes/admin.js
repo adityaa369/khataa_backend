@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const { protectAdmin, requireRole, requireMFA } = require('../middleware/adminAuth');
 const { login, getDashboard, getIncidents, updateIncident, getFinancialOverview, getTransactions, getLoans } = require('../controllers/admin');
@@ -32,9 +32,10 @@ router.get('/customers/:id', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_AD
 router.post('/customers/:id/kyc/unmask', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN'), requireMFA, unmaskKYC);
 
 
-const { getSecurityOverview, getSecurityEvents } = require('../controllers/adminSecurity');
+const { getSecurityOverview, getSecurityEvents, investigateSecurityEvents } = require('../controllers/adminSecurity');
 router.get('/security/overview', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getSecurityOverview);
 router.get('/security/events', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getSecurityEvents);
+router.get('/security/investigate', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), investigateSecurityEvents);
 
 
 const { getReconciliationOverview, getIncidents: getReconIncidents, getIncidentDetail, updateIncidentWorkflow } = require('../controllers/adminReconciliation');
@@ -72,3 +73,4 @@ const { getProductionReadiness } = require('../controllers/adminReadiness');
 router.get('/system/readiness', requireRole('SUPER_ADMIN'), requireMFA, getProductionReadiness);
 
 module.exports = router;
+
