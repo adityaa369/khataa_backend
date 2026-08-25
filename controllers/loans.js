@@ -835,3 +835,66 @@ exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'record
 exports.addCredit = (req, res) => _handleCustomTransaction(req, res, 'addCredit');
 exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');
 
+
+exports.getPortfolioSummary = async (req, res) => {
+    try {
+        const lenderId = req.user.id;
+        const summary = await require('../models/Loan').aggregate([
+            { $match: { lender: lenderId } },
+            {
+                $group: {
+                    _id: null,
+                    loanCount: { $sum: 1 },
+                    activeLoanCount: {
+                        $sum: { $cond: [{ $in: ['$status', ['active', 'due_soon', 'overdue']] }, 1, 0] }
+                    },
+                    totalLentPaise: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$status', ['pending_approval', 'pending_otp', 'rejected']] },
+                                0,
+                                { $ifNull: ['$amountPaise', { $multiply: ['$amount', 100] }] }
+                            ]
+                        }
+                    },
+                    totalCollectedPaise: {
+                        $sum: { $ifNull: ['$paidAmountPaise', { $multiply: [{ $ifNull: ['$paidAmount', 0] }, 100] }] }
+                    },
+                    outstandingPaise: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$status', ['pending_approval', 'pending_otp', 'rejected']] },
+                                0,
+                                {
+                                    $let: {
+                                        vars: {
+                                            payable: { $ifNull: ['$totalPayablePaise', { $multiply: [{ $ifNull: ['$totalPayable', 0] }, 100] }] },
+                                            paid: { $ifNull: ['$paidAmountPaise', { $multiply: [{ $ifNull: ['$paidAmount', 0] }, 100] }] }
+                                        },
+                                        in: { $max: [0, { $subtract: ['$$payable', '$$paid'] }] }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        ]);
+        
+        let data = { loanCount: 0, activeLoanCount: 0, totalLentPaise: 0, totalCollectedPaise: 0, outstandingPaise: 0 };
+        if (summary.length > 0) {
+            const s = summary[0];
+            data = {
+                loanCount: s.loanCount || 0,
+                activeLoanCount: s.activeLoanCount || 0,
+                totalLentPaise: Math.round(s.totalLentPaise || 0),
+                totalCollectedPaise: Math.round(s.totalCollectedPaise || 0),
+                outstandingPaise: Math.round(s.outstandingPaise || 0)
+            };
+        }
+        res.status(200).json({ success: true, data, meta: { lastVerifiedAt: new Date().toISOString() } });
+    } catch (err) {
+        console.error('[PortfolioSummary] Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
