@@ -14,6 +14,7 @@ const {
     recordPayment,
     addCredit,
     recordInterest
+    sendPaymentNudge
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
 const { cacheMiddleware } = require('../middleware/cache');
@@ -38,11 +39,13 @@ router.post('/:id/resend-otp', resendLoanOtp);
 router.patch('/:id/progress', updateProgress);
 
 // Custom Payments
+router.post('/:id/payment-nudge', protect, apiLimiter, requireIdempotency, sendPaymentNudge);
 router.post('/:id/record-payment', financialLimiter, requireIdempotency, validatePaymentAmount, recordPayment);
 router.post('/:id/add-credit', validatePaymentAmount, addCredit);
 router.post('/:id/record-interest', validatePaymentAmount, recordInterest);
 
 module.exports = router;
+
 
 
 

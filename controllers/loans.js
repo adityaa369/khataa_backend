@@ -1014,3 +1014,64 @@ exports.getRepaymentTimeline = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
+
+exports.sendPaymentNudge = async (req, res) => {
+    try {
+        const loanId = req.params.id;
+        
+        // Ensure strictly lender
+        const Loan = require('../models/Loan');
+        const User = require('../models/User');
+        const Notification = require('../models/Notification');
+        const { sendPushNotification } = require('../utils/fcm');
+
+        const loan = await Loan.findById(loanId);
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Unauthorized. Only the lender can send a nudge.' });
+        
+        // Exclude Chits
+        if (loan.loanType === 'chit') return res.status(400).json({ success: false, message: 'Nudges are not available for Chit loans.' });
+        
+        // Must be active
+        if (['closed', 'rejected', 'pending'].includes(loan.status)) {
+            return res.status(400).json({ success: false, message: 'Cannot nudge this loan at its current status.' });
+        }
+
+        const borrower = await User.findOne({ id: loan.borrower });
+        if (!borrower) return res.status(404).json({ success: false, message: 'Borrower not found' });
+
+        // Cooldown Rule: 24 hours
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const recentNudge = await Notification.findOne({
+            userId: borrower._id,
+            type: 'PAYMENT_NUDGE_SENT',
+            'data.loanId': loan._id.toString(),
+            createdAt: { $gte: twentyFourHoursAgo }
+        });
+
+        if (recentNudge) {
+            return res.status(429).json({ success: false, message: 'A payment nudge was already sent recently. Please wait 24 hours.' });
+        }
+
+        const title = 'Payment Nudge';
+        const body = 'Your lender has sent you a payment nudge. Please contact your lender to discuss your next payment.';
+        
+        await Notification.create({
+            userId: borrower._id,
+            title,
+            body,
+            type: 'PAYMENT_NUDGE_SENT',
+            data: { loanId: loan._id.toString() }
+        });
+
+        if (borrower.fcmToken) {
+            sendPushNotification(borrower.fcmToken, title, body, { type: 'PAYMENT_NUDGE_SENT', loanId: loan._id.toString() })
+                .catch(fcmErr => console.error('[Loans] FCM Nudge notification failed:', fcmErr.message));
+        }
+
+        return res.status(200).json({ success: true, message: 'Payment nudge sent successfully.' });
+    } catch (err) {
+        console.error('[PaymentNudge] Error:', err);
+        return res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
