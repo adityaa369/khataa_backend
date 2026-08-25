@@ -1,7 +1,4 @@
 ﻿
-// ---------------------------------------------------------
-// F.9: PRODUCTION CONTAMINATION GUARD
-// ---------------------------------------------------------
 if (process.env.NODE_ENV === 'staging') {
     const mongoUri = process.env.MONGO_URI || '';
     const redisUrl = process.env.REDIS_URL || '';
@@ -202,12 +199,6 @@ const notificationRoutes = require('./routes/notifications');
 const chitFundRoutes = require('./routes/chitFunds');
 
 
-app.get('/api/health/env', (req, res) => {
-    res.json({
-        environment: process.env.NODE_ENV || 'development',
-        status: 'OPERATIONS NORMAL',
-        timestamp: new Date().toISOString()
-    });
 });
 
 app.use('/api/admin', adminRoutes);
