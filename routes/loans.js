@@ -1,5 +1,6 @@
 ﻿const express = require('express');
 const {
+    getRepaymentTimeline,
     createLoan,
     getGivenLoans,
     getTakenLoans,
@@ -28,7 +29,8 @@ router.post('/', validateCreateLoan, createLoan);
 router.get('/given', cacheMiddleware('given_loans', 300), getGivenLoans);
 router.get('/portfolio-summary', getPortfolioSummary);
 router.get('/taken', cacheMiddleware('taken_loans', 300), getTakenLoans);
-router.post('/:id/verify', financialLimiter, verifyLoan);
+router.get('/:id/repayment-timeline', getRepaymentTimeline);
+  router.post('/:id/verify', financialLimiter, verifyLoan);
 router.post('/:id/verify-lender-otp', financialLimiter, verifyLenderOtp);
 router.post('/:id/close-otp', requestClosureOtp);
 router.post('/:id/close', financialLimiter, closeLoan);
@@ -41,6 +43,7 @@ router.post('/:id/add-credit', validatePaymentAmount, addCredit);
 router.post('/:id/record-interest', validatePaymentAmount, recordInterest);
 
 module.exports = router;
+
 
 
 

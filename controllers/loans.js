@@ -898,3 +898,109 @@ exports.getPortfolioSummary = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
+
+
+// Helper for accurate calendar month addition avoiding JS rollover drift
+function addCalendarMonths(date, months) {
+    const d = new Date(date);
+    const expectedMonth = (d.getMonth() + months) % 12;
+    d.setMonth(d.getMonth() + months);
+    if (d.getMonth() !== expectedMonth) {
+        d.setDate(0); // Roll back to last day of the intended month
+    }
+    return d;
+}
+
+// @desc    Get flexible repayment timeline projection for a loan
+// @route   GET /api/loans/:id/repayment-timeline
+// @access  Private (Lender & Borrower)
+exports.getRepaymentTimeline = async (req, res) => {
+    try {
+        const loan = await require('../models/Loan').findById(req.params.id);
+        
+        if (!loan) {
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+
+        // IDOR Protection: Only the lender or borrower can view this
+        if (loan.lender !== req.user.id && loan.borrower !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Unauthorized access to loan timeline' });
+        }
+
+        // Feature is explicitly disabled for Chit loans
+        if (loan.loanType === 'chit') {
+            return res.status(200).json({
+                success: true,
+                trackingEnabled: false,
+                reason: 'UNSUPPORTED_LOAN_TYPE'
+            });
+        }
+
+        // A loan must be active/completed to have a timeline. Pending loans don't have an activatedAt anchor.
+        if (['pending_approval', 'pending_otp', 'rejected'].includes(loan.status)) {
+            return res.status(200).json({
+                success: true,
+                trackingEnabled: false,
+                reason: 'LOAN_NOT_ACTIVE'
+            });
+        }
+
+        const anchor = loan.activatedAt || loan.startDate || loan._id.getTimestamp();
+        const durationMonths = loan.durationMonths || 0;
+
+        const timeline = [];
+        for (let i = 1; i <= durationMonths; i++) {
+            timeline.push({
+                periodIndex: i,
+                periodStart: addCalendarMonths(anchor, i - 1),
+                periodEnd: addCalendarMonths(anchor, i),
+                status: 'NO_PAYMENT_RECORDED',
+                hasPayments: false,
+                totalPaidPaise: 0,
+                transactions: []
+            });
+        }
+
+        const postTermTransactions = [];
+
+        // Project transactions onto periods
+        const transactions = loan.transactions || [];
+        for (const tx of transactions) {
+            // Only aggregate payments
+            if (tx.type === 'payment' || tx.type === 'interest_payment' || tx.type === 'credit_added') {
+                const txDate = new Date(tx.recordedAt);
+                let matched = false;
+
+                for (const period of timeline) {
+                    if (txDate >= period.periodStart && txDate < period.periodEnd) {
+                        period.transactions.push(tx);
+                        period.totalPaidPaise += (tx.amountPaise || Math.round(tx.amount * 100));
+                        period.hasPayments = true;
+                        period.status = 'RECORDED';
+                        matched = true;
+                        break;
+                    }
+                }
+
+                if (!matched) {
+                    postTermTransactions.push(tx);
+                }
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            trackingEnabled: true,
+            data: {
+                durationMonths,
+                startDate: anchor,
+                timeline,
+                postTermTransactions
+            }
+        });
+
+    } catch (err) {
+        console.error('[RepaymentTimeline] Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
