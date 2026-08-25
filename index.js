@@ -199,7 +199,6 @@ const notificationRoutes = require('./routes/notifications');
 const chitFundRoutes = require('./routes/chitFunds');
 
 
-});
 
 app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
