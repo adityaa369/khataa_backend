@@ -6,6 +6,9 @@ const allowedOrigins = new Set([
   process.env.ADMIN_APP_URL,
   process.env.ADMIN_PREVIEW_URL,
   'https://ops.khatha.app',
+  'https://khataa.in',
+  'https://www.khataa.in',
+  'https://app.khataa.in',
 ]);
 
 const corsOptions = {
