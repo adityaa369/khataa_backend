@@ -945,7 +945,16 @@ exports.getRepaymentTimeline = async (req, res) => {
             });
         }
 
-        const anchor = loan.activatedAt || loan.startDate || loan._id.getTimestamp();
+        let anchor = loan.activatedAt;
+        let anchorSource = 'activatedAt';
+        if (!anchor) {
+            anchor = loan.startDate;
+            anchorSource = 'startDate';
+        }
+        if (!anchor) {
+            anchor = loan._id.getTimestamp();
+            anchorSource = 'createdAt';
+        }
         const durationMonths = loan.durationMonths || 0;
 
         const timeline = [];
@@ -994,6 +1003,7 @@ exports.getRepaymentTimeline = async (req, res) => {
             data: {
                 durationMonths,
                 startDate: anchor,
+                anchorSource,
                 timeline,
                 postTermTransactions
             }
