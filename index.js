@@ -1,4 +1,34 @@
-﻿const express = require('express');
+﻿
+// ---------------------------------------------------------
+// F.9: PRODUCTION CONTAMINATION GUARD
+// ---------------------------------------------------------
+if (process.env.NODE_ENV === 'staging') {
+    const mongoUri = process.env.MONGO_URI || '';
+    const redisUrl = process.env.REDIS_URL || '';
+    
+    // Fail immediately if missing
+    if (!mongoUri || !redisUrl) {
+        console.error('STAGING FATAL: Missing infrastructure credentials.');
+        process.exit(1);
+    }
+    
+    const prodIdentifiers = ['prod', 'production', 'khataa-prod'];
+    
+    const isContaminated = prodIdentifiers.some(id => 
+        mongoUri.toLowerCase().includes(id) || redisUrl.toLowerCase().includes(id)
+    );
+    
+    if (isContaminated) {
+        console.error('STAGING FATAL: Production contamination detected in staging environment variables.');
+        console.error('Refusing to boot staging server with production infrastructure.');
+        process.exit(1);
+    }
+    
+    console.log('STAGING ENV VALIDATED: Infrastructure successfully isolated.');
+}
+// ---------------------------------------------------------
+
+const express = require('express');
 // Override global console to enforce strict PII redaction across the entire app
 const logger = require('./utils/logger');
 global.console = { ...global.console, ...logger };
@@ -170,6 +200,15 @@ const creditScoreRoutes = require('./routes/creditScore');
 const userRoutes = require('./routes/users');
 const notificationRoutes = require('./routes/notifications');
 const chitFundRoutes = require('./routes/chitFunds');
+
+
+app.get('/api/health/env', (req, res) => {
+    res.json({
+        environment: process.env.NODE_ENV || 'development',
+        status: 'OPERATIONS NORMAL',
+        timestamp: new Date().toISOString()
+    });
+});
 
 app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
