@@ -24,6 +24,8 @@ router.post('/refresh', authController.refreshToken);
 router.post('/logout', protect, authController.logout);
 router.get('/sessions', protect, authController.getSessions);
 router.delete('/sessions/:sessionId', protect, authController.revokeSession);
+router.post('/sessions/revoke-others', protect, authController.revokeOtherSessions);
+router.get('/security-events', protect, authController.getSecurityEvents);
 router.post('/forgot-password', authLimiter, authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
 

@@ -1,4 +1,7 @@
 const jwt = require('jsonwebtoken');
+const Session = require('../models/Session');
+const SecurityEvent = require('../models/SecurityEvent');
+
 const TokenManager = require('../utils/tokenManager');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
@@ -215,7 +218,8 @@ exports.loginPassword = async (req, res) => {
         });
     } catch (err) {
         console.error('[Auth] loginPassword Error:', err.message);
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
 
@@ -266,7 +270,8 @@ exports.loginPassword = async (req, res) => {
         });
     } catch (err) {
         console.error('[Auth] loginPassword Error:', err.message);
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
 
@@ -349,7 +354,8 @@ exports.refreshToken = async (req, res) => {
         });
     } catch (err) {
         console.error('[Auth] Refresh error:', err.message);
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
 
@@ -365,7 +371,8 @@ exports.logout = async (req, res) => {
         }
         res.status(200).json({ success: true, message: 'Logged out successfully' });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
 
@@ -378,7 +385,8 @@ exports.getSessions = async (req, res) => {
             .select('-refreshTokenHash'); // Never expose hash
         res.status(200).json({ success: true, sessions });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
 
@@ -389,12 +397,21 @@ exports.revokeSession = async (req, res) => {
     try {
         const session = await Session.findOneAndDelete({ _id: req.params.sessionId, userId: req.user.id });
         if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+        
+        await SecurityEvent.create({
+            eventId: `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            eventType: 'SESSION_REVOKED',
+            actorType: 'USER',
+            actorId: req.user.id,
+            result: 'SUCCESS'
+        });
+
         res.status(200).json({ success: true, message: 'Session revoked' });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
-
 // @desc    Request Password Reset
 // @route   POST /api/auth/forgot-password
 // @access  Public
@@ -418,7 +435,8 @@ exports.forgotPassword = async (req, res) => {
         // If they forget password, they should probably verify an OTP first!
         res.status(200).json({ success: true, resetToken }); // Return token (simulate OTP delivery)
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
 
@@ -451,6 +469,63 @@ exports.resetPassword = async (req, res) => {
 
         res.status(200).json({ success: true, message: 'Password reset successful. All active sessions revoked.' });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
+    }
+};
+
+
+// @desc    Revoke all other sessions
+// @route   POST /api/auth/sessions/revoke-others
+// @access  Private
+exports.revokeOtherSessions = async (req, res) => {
+    try {
+        const { refreshToken } = req.body;
+        if (!refreshToken) return res.status(400).json({ success: false, message: 'Refresh token required to identify current session' });
+
+        const tokenHash = TokenManager.hashRefreshToken(refreshToken);
+        const currentSession = await Session.findOne({ refreshTokenHash: tokenHash, userId: req.user.id });
+
+        if (!currentSession) {
+            return res.status(401).json({ success: false, message: 'Invalid refresh token context' });
+        }
+
+        // Revoke all other sessions
+        const result = await Session.deleteMany({
+            userId: req.user.id,
+            _id: { $ne: currentSession._id }
+        });
+
+        await SecurityEvent.create({
+            eventId: `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            eventType: 'ALL_OTHER_SESSIONS_REVOKED',
+            actorType: 'USER',
+            actorId: req.user.id,
+            result: 'SUCCESS'
+        });
+
+        res.status(200).json({ success: true, message: `Revoked ${result.deletedCount} other session(s).`, revokedCount: result.deletedCount });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
+    }
+};
+
+// @desc    Get user security events
+// @route   GET /api/auth/security-events
+// @access  Private
+exports.getSecurityEvents = async (req, res) => {
+    try {
+        // Return only the authenticated user's events, limit to 10.
+        // Omit internal identifiers and sensitive data.
+        const events = await SecurityEvent.find({ actorId: req.user.id })
+            .sort({ createdAt: -1 })
+            .limit(10)
+            .select('-__v -ipReference -metadata'); 
+
+        res.status(200).json({ success: true, events });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
