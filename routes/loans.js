@@ -13,7 +13,7 @@ const {
     updateProgress,
     recordPayment,
     addCredit,
-    recordInterest
+    recordInterest,
     sendPaymentNudge
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
