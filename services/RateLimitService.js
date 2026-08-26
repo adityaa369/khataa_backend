@@ -11,7 +11,8 @@ class RateLimitService {
      * @param {boolean} failOpen - If Redis crashes, should this pass (true) or block (false)?
      */
     static async consume(key, limit, windowSeconds, failOpen = false) {
-        if (redis.status !== 'ready') {
+        const client = redis.getRedisClient();
+        if (!redis.isRedisAvailable() || !client || client.status !== 'ready') {
             if (failOpen) {
                 logger.warn(`[RateLimit] Redis unavailable, failing OPEN for key: ${key}`);
                 return { allowed: true, remaining: 1, reset: Date.now() + 10000 };
@@ -31,7 +32,7 @@ class RateLimitService {
                 local ttl = redis.call("PTTL", KEYS[1])
                 return {current, ttl}
             `;
-            const result = await redis.eval(script, 1, key, windowSeconds);
+            const result = await client.eval(script, 1, key, windowSeconds);
             const currentCount = result[0];
             const ttlMs = result[1];
 
