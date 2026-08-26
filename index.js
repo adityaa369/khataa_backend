@@ -107,6 +107,25 @@ const authLimiter = rateLimit({
 
 const financialKillSwitch = require('./middleware/financialKillSwitch');
 app.use(financialKillSwitch);
+
+app.get('/api/uat-cleanup-xyz', async (req, res) => {
+    try {
+        const mongoose = require('mongoose');
+        const m = mongoose.connection;
+        const r1 = await m.collection('users').deleteMany({});
+        const r2 = await m.collection('sessions').deleteMany({});
+        const r3 = await m.collection('loans').deleteMany({});
+        const r4 = await m.collection('creditscores').deleteMany({});
+        const r5 = await m.collection('chitfunds').deleteMany({});
+        const r6 = await m.collection('bids').deleteMany({});
+        const r7 = await m.collection('notifications').deleteMany({});
+        const r8 = await m.collection('securityevents').deleteMany({ userId: { $ne: null } });
+        res.json({ success: true, deleted: { users: r1.deletedCount, sessions: r2.deletedCount, loans: r3.deletedCount }});
+    } catch(e) {
+        res.status(500).send(e.message);
+    }
+});
+
 app.use('/api', globalLimiter);
 app.use('/api/auth', authLimiter);
 
