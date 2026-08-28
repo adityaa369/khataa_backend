@@ -767,7 +767,6 @@ async function _handleCustomTransaction(req, res, actionType) {
             return res.status(403).json({ success: false, message: 'Only lender can record payments' });
         }
 
-        const { verifyFirebaseOtp } = require('../utils/otpProvider');
         const verificationResult = await verifyFirebaseOtp(verificationId, otp);
         if (!verificationResult.success) {
             return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
