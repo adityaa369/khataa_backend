@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const {
     getRepaymentTimeline,
     createLoan,
@@ -14,7 +14,8 @@ const {
     recordPayment,
     addCredit,
     recordInterest,
-    sendPaymentNudge
+    sendPaymentNudge,
+    toggleMonthStatus
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
 const { cacheMiddleware } = require('../middleware/cache');
@@ -43,6 +44,7 @@ router.post('/:id/payment-nudge', protect, apiLimiter, requireIdempotency, sendP
 router.post('/:id/record-payment', financialLimiter, requireIdempotency, validatePaymentAmount, recordPayment);
 router.post('/:id/add-credit', validatePaymentAmount, addCredit);
 router.post('/:id/record-interest', validatePaymentAmount, recordInterest);
+router.patch('/:id/months/:monthIndex', protect, toggleMonthStatus);
 
 module.exports = router;
 

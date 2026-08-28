@@ -1,4 +1,4 @@
-﻿const Notification = require('../models/Notification');
+const Notification = require('../models/Notification');
 const Loan = require('../models/Loan');
 const User = require('../models/User');
 const { sendOtp } = require('../utils/otpProvider');
@@ -134,6 +134,14 @@ exports.createLoan = async (req, res) => {
             });
         }
 
+        const monthsTracking = [];
+        for (let i = 1; i <= durationMonths; i++) {
+            monthsTracking.push({
+                monthIndex: i,
+                status: 'unpaid'
+            });
+        }
+
         const loan = await Loan.create({
             lender: req.user.id,
             borrower: borrower.id,
@@ -150,7 +158,8 @@ exports.createLoan = async (req, res) => {
             transaction_id,
             documentUrl,
             otp: 'FIREBASE_OTP',
-            isOtpVerified: false
+            isOtpVerified: false,
+            monthsTracking
         });
         
         await invalidateLoanCache(loan.lender, loan.borrower);
@@ -740,10 +749,38 @@ exports.uploadDocument = async (req, res) => {
 
 async function _handleCustomTransaction(req, res, actionType) {
     try {
-        const { amount } = req.body;
+        const { amount, otp, verificationId } = req.body;
         const amountPaise = Math.round(amount * 100);
         trackFinancialEvent('LOAN_PAYMENT_STARTED', { actionType, amountPaise });
         metrics.financial.paymentsAttempted++;
+
+        // Verify Firebase OTP first
+        if (!otp || !verificationId) {
+            return res.status(400).json({ success: false, message: 'OTP and verificationId are required' });
+        }
+        
+        const currentLoanForOtp = await Loan.findById(req.params.id);
+        if (!currentLoanForOtp) {
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+        if (currentLoanForOtp.lender !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only lender can record payments' });
+        }
+
+        const { verifyFirebaseOtp } = require('../utils/otpProvider');
+        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+        if (!verificationResult.success) {
+            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
+        }
+
+        const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
+        const loanPhone = currentLoanForOtp.borrowerPhone.replace(/\D/g, '').slice(-10);
+        if (returnedPhone !== loanPhone) {
+            return res.status(400).json({
+                success: false,
+                message: `OTP verified phone (+91${returnedPhone}) does not match borrower phone (+91${loanPhone})`
+            });
+        }
 
         const { loan, notifTitle, notifBody } = await withTransaction(async (session) => {
             const currentLoan = await Loan.findById(req.params.id).session(session);
@@ -834,6 +871,48 @@ async function _handleCustomTransaction(req, res, actionType) {
 exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'recordPayment');
 exports.addCredit = (req, res) => _handleCustomTransaction(req, res, 'addCredit');
 exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');
+
+// @desc    Toggle month status for simple visual tracking
+// @route   PATCH /api/loans/:id/months/:monthIndex
+// @access  Private (Lender)
+exports.toggleMonthStatus = async (req, res) => {
+    try {
+        const { status } = req.body;
+        const monthIndex = parseInt(req.params.monthIndex);
+        const loan = await require('../models/Loan').findById(req.params.id);
+        
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update timeline' });
+        
+        const monthObj = loan.monthsTracking.find(m => m.monthIndex === monthIndex);
+        if (monthObj) {
+            monthObj.status = status;
+            if (status === 'paid') {
+                monthObj.markedPaidAt = new Date();
+                monthObj.markedBy = req.user.id;
+            } else {
+                monthObj.markedPaidAt = undefined;
+                monthObj.markedBy = undefined;
+            }
+        } else {
+            // Push new month if missing
+            loan.monthsTracking.push({
+                monthIndex,
+                status,
+                markedPaidAt: status === 'paid' ? new Date() : undefined,
+                markedBy: status === 'paid' ? req.user.id : undefined
+            });
+        }
+        
+        await loan.save();
+        await require('../config/redis').cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+        
+        res.status(200).json({ success: true, loan });
+    } catch (err) {
+        console.error('[Loans] toggleMonthStatus Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
 
 
 exports.getPortfolioSummary = async (req, res) => {

@@ -72,6 +72,14 @@ const LoanSchema = new mongoose.Schema({
     },
     paidAmount: { type: Number, default: 0 },
     paidAmountPaise: { type: Number, validate: { validator: Number.isInteger }, default: 0 },
+    monthsTracking: [
+        {
+            monthIndex: { type: Number, required: true },
+            status: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' },
+            markedPaidAt: Date,
+            markedBy: String
+        }
+    ],
     transactions: [
         {
             type: {
