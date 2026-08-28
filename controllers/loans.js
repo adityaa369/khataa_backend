@@ -1153,3 +1153,35 @@ exports.sendPaymentNudge = async (req, res) => {
         return res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
+
+
+// @desc    Delete a pending loan request
+// @route   DELETE /api/loans/:id
+// @access  Private
+exports.deleteLoan = async (req, res) => {
+    try {
+        const loan = await Loan.findById(req.params.id);
+        
+        if (!loan) {
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+
+        if (loan.userId.toString() !== req.user.id && loan.lenderId.toString() !== req.user.id) {
+            return res.status(401).json({ success: false, message: 'Not authorized to delete this loan' });
+        }
+
+        if (!['pending_otp', 'pending_approval'].includes(loan.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Only pending requests can be cancelled. Active loans cannot be deleted.' 
+            });
+        }
+
+        await Loan.findByIdAndDelete(req.params.id);
+        
+        res.status(200).json({ success: true, data: {} });
+    } catch (err) {
+        console.error('[Loans] Delete Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};

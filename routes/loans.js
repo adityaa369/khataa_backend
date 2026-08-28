@@ -15,7 +15,8 @@ const {
     addCredit,
     recordInterest,
     sendPaymentNudge,
-    toggleMonthStatus
+    toggleMonthStatus,
+    deleteLoan
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
 const { cacheMiddleware } = require('../middleware/cache');
@@ -45,6 +46,8 @@ router.post('/:id/record-payment', financialLimiter, requireIdempotency, validat
 router.post('/:id/add-credit', validatePaymentAmount, addCredit);
 router.post('/:id/record-interest', validatePaymentAmount, recordInterest);
 router.patch('/:id/months/:monthIndex', protect, toggleMonthStatus);
+
+router.delete('/:id', deleteLoan);
 
 module.exports = router;
 
