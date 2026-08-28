@@ -17,6 +17,7 @@ router.post('/verify-otp', otpLimiter, authController.verifyOtp);
 router.post('/login-password', authLimiter, authController.loginPassword);
 router.post('/register', authLimiter, protect, validateRegister, authController.register);
 router.get('/me', protect, authController.getMe);
+router.post('/send-verification-email', protect, authLimiter, authController.sendVerificationEmail);
 router.get('/verify-email/:token', authController.verifyEmail);
 
 

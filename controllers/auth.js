@@ -275,8 +275,51 @@ exports.loginPassword = async (req, res) => {
     }
 };
 
+// @desc    Send/Resend Verification Email
+// @route   POST /api/auth/send-verification-email
+// @access  Private
+exports.sendVerificationEmail = async (req, res) => {
+    try {
+        const user = await User.findOne({ id: req.user.id });
+        
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+        if (user.isEmailVerified) {
+            return res.status(400).json({ success: false, message: 'Email is already verified' });
+        }
+        if (!user.email) {
+            return res.status(400).json({ success: false, message: 'No email address found on profile' });
+        }
+
+        // Generate new token
+        const verifyToken = crypto.randomBytes(20).toString('hex');
+        const expires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+
+        user.emailVerificationToken = verifyToken;
+        user.emailVerificationExpires = expires;
+        await user.save();
+
+        const verifyUrl = `${process.env.BACKEND_URL || 'https://khataa-backend.onrender.com'}/api/auth/verify-email/${verifyToken}`;
+        
+        await sendEmail({
+            to: user.email,
+            subject: 'Verify your Khatha email address',
+            html: emailVerificationTemplate(
+                `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.phone,
+                verifyUrl
+            )
+        });
+
+        res.status(200).json({ success: true, message: 'Verification email sent successfully' });
+    } catch (err) {
+        console.error('[Auth] sendVerificationEmail error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to send verification email' });
+    }
+};
+
 // @desc    Verify email address via token link
-// @route   GET /api/auth/verify-email/:token, refreshToken
+// @route   GET /api/auth/verify-email/:token
 // @access  Public
 exports.verifyEmail = async (req, res) => {
     try {
