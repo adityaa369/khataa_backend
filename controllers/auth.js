@@ -292,11 +292,14 @@ exports.sendVerificationEmail = async (req, res) => {
             return res.status(400).json({ success: false, message: 'No email address found on profile' });
         }
 
-        // Generate new token
+        // Generate new secure random token
         const verifyToken = crypto.randomBytes(20).toString('hex');
+        
+        // Hash it for secure storage
+        const hashedToken = crypto.createHash('sha256').update(verifyToken).digest('hex');
         const expires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
 
-        user.emailVerificationToken = verifyToken;
+        user.emailVerificationToken = hashedToken;
         user.emailVerificationExpires = expires;
         await user.save();
 
@@ -326,8 +329,11 @@ exports.verifyEmail = async (req, res) => {
         const { token } = req.params;
         if (!token) return res.status(400).send('<h2>Invalid verification link.</h2>');
 
+        // Hash the incoming raw token to match the database stored hash
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
         const user = await User.findOne({
-            emailVerificationToken: token,
+            emailVerificationToken: hashedToken,
             emailVerificationExpires: { $gt: Date.now() }
         }).select('+emailVerificationToken +emailVerificationExpires');
 
