@@ -754,31 +754,42 @@ async function _handleCustomTransaction(req, res, actionType) {
         trackFinancialEvent('LOAN_PAYMENT_STARTED', { actionType, amountPaise });
         metrics.financial.paymentsAttempted++;
 
-        // Verify Firebase OTP first
-        if (!otp || !verificationId) {
-            return res.status(400).json({ success: false, message: 'OTP and verificationId are required' });
-        }
-        
-        const currentLoanForOtp = await Loan.findById(req.params.id);
-        if (!currentLoanForOtp) {
-            return res.status(404).json({ success: false, message: 'Loan not found' });
-        }
-        if (currentLoanForOtp.lender !== req.user.id) {
-            return res.status(403).json({ success: false, message: 'Only lender can record payments' });
-        }
+        let currentLoanForOtp;
+        if (actionType !== 'addCredit') {
+            // Verify Firebase OTP first
+            if (!otp || !verificationId) {
+                return res.status(400).json({ success: false, message: 'OTP and verificationId are required' });
+            }
+            
+            currentLoanForOtp = await Loan.findById(req.params.id);
+            if (!currentLoanForOtp) {
+                return res.status(404).json({ success: false, message: 'Loan not found' });
+            }
+            if (currentLoanForOtp.lender !== req.user.id) {
+                return res.status(403).json({ success: false, message: 'Only lender can record payments' });
+            }
 
-        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
-        if (!verificationResult.success) {
-            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
-        }
+            const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+            if (!verificationResult.success) {
+                return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
+            }
 
-        const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
-        const loanPhone = currentLoanForOtp.borrowerPhone.replace(/\D/g, '').slice(-10);
-        if (returnedPhone !== loanPhone) {
-            return res.status(400).json({
-                success: false,
-                message: `OTP verified phone (+91${returnedPhone}) does not match borrower phone (+91${loanPhone})`
-            });
+            const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
+            const loanPhone = currentLoanForOtp.borrowerPhone.replace(/\D/g, '').slice(-10);
+            if (returnedPhone !== loanPhone) {
+                return res.status(400).json({
+                    success: false,
+                    message: `OTP verified phone (+91${returnedPhone}) does not match borrower phone (+91${loanPhone})`
+                });
+            }
+        } else {
+            currentLoanForOtp = await Loan.findById(req.params.id);
+            if (!currentLoanForOtp) {
+                return res.status(404).json({ success: false, message: 'Loan not found' });
+            }
+            if (currentLoanForOtp.lender !== req.user.id) {
+                return res.status(403).json({ success: false, message: 'Only lender can record payments' });
+            }
         }
 
         const { loan, notifTitle, notifBody } = await withTransaction(async (session) => {

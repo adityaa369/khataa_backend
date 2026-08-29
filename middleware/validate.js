@@ -42,6 +42,8 @@ const validateCreateLoan = [
 // Payment recording validation
 const validatePaymentAmount = [
     body('amount').notEmpty().withMessage('Amount is required').isInt({ min: 1, max: 1000000000 }).withMessage('Amount must be a positive integer in paise'),
+    body('otp').optional().isString(),
+    body('verificationId').optional().isString(),
     handleValidationErrors
 ];
 
