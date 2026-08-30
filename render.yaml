@@ -9,7 +9,7 @@ services:
     healthCheckPath: /health/live
     envVars:
       - key: NODE_VERSION
-        value: 18.16.0
+        value: 22.14.0
       - key: PORT
         value: 10000
       - fromGroup: khatha-secrets

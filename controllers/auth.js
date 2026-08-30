@@ -36,8 +36,15 @@ exports.verifyOtp = async (req, res) => {
             phoneStr = phoneStr.substring(2);
         }
 
+        // Extract the verified Firebase UID — this is the authoritative identity key
+        const verifiedFirebaseUid = result.uid;
+        if (!verifiedFirebaseUid) {
+            return res.status(400).json({ success: false, message: 'Firebase credential contains no UID' });
+        }
+
         let isNewUser = false;
-        let user = await User.findOne({ phone: phoneStr });
+        // Look up by phone first (existing behavior), but we'll enforce UID cross-check below
+        let user = await User.findOne({ phone: phoneStr }).select('+firebaseUid');
 
         const registrationDetails = req.body.registrationDetails;
         let updates = {};
@@ -55,11 +62,13 @@ exports.verifyOtp = async (req, res) => {
         }
 
         if (!user) {
+            // New user — create and bind UID atomically
             const id = crypto.randomUUID();
             user = await User.create({
                 id,
                 phone: phoneStr,
                 isVerified: true,
+                firebaseUid: verifiedFirebaseUid,
                 ...updates
             });
             isNewUser = true;
@@ -90,13 +99,34 @@ exports.verifyOtp = async (req, res) => {
                     console.error('[Auth] Failed to send verification email:', emailErr.message);
                 }
             }
-        } else if (registrationDetails) {
-            user = await User.findOneAndUpdate(
-                { phone: phoneStr },
-                { $set: updates },
-                { new: true }
-            );
+        } else {
+            // Existing user — enforce Firebase UID binding
+            if (user.firebaseUid) {
+                // UID is already bound — must match exactly
+                if (user.firebaseUid !== verifiedFirebaseUid) {
+                    // This is the account-rebinding attack: different Firebase UID, same phone.
+                    // Could be account deletion+recreation. Reject and require explicit recovery.
+                    console.error(`[Auth] Firebase UID mismatch for phone ${phoneStr}: stored=${user.firebaseUid} incoming=${verifiedFirebaseUid}`);
+                    return res.status(403).json({
+                        success: false,
+                        code: 'FIREBASE_UID_MISMATCH',
+                        message: 'This phone number is associated with a different Firebase account. Please contact support for account recovery.'
+                    });
+                }
+            } else {
+                // Legacy user with no UID yet — bind now on first successful login
+                await User.findByIdAndUpdate(user._id, { firebaseUid: verifiedFirebaseUid });
+            }
+
+            if (registrationDetails) {
+                user = await User.findOneAndUpdate(
+                    { phone: phoneStr },
+                    { $set: updates },
+                    { new: true }
+                );
+            }
         }
+
 
         const tokenData = await TokenManager.createSession(user.id, req.headers['user-agent'], req.ip);
         const token = tokenData.accessToken;
@@ -464,13 +494,16 @@ exports.revokeSession = async (req, res) => {
 // @desc    Request Password Reset
 // @route   POST /api/auth/forgot-password
 // @access  Public
-exports.forgotPassword = async (req, res) => {
+exports.forgotPassword = async (req, res, next) => {
     try {
         let phoneStr = req.body.phone.replace(/\D/g, '');
         if (phoneStr.startsWith('91') && phoneStr.length > 10) phoneStr = phoneStr.substring(2);
 
         const user = await User.findOne({ phone: phoneStr });
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        if (!user) {
+            // Anti-enumeration: Return success even if not found
+            return res.status(200).json({ success: true, message: 'If the phone number is registered, password reset instructions have been sent.' });
+        }
 
         // Generate robust reset token
         const resetToken = crypto.randomBytes(32).toString('hex');
@@ -480,12 +513,11 @@ exports.forgotPassword = async (req, res) => {
         user.passwordResetExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
         await user.save();
 
-        // In a real app, send OTP/Link here. For Khatha, they use Firebase OTP for phone auth.
-        // If they forget password, they should probably verify an OTP first!
-        res.status(200).json({ success: true, resetToken }); // Return token (simulate OTP delivery)
+        // In production, an SMS would be sent here containing the reset token.
+        // We MUST NOT return the token in the HTTP response to prevent account takeover.
+        res.status(200).json({ success: true, message: 'If the phone number is registered, password reset instructions have been sent.' });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
+        next(err);
     }
 };
 

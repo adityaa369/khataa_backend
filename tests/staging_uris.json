@@ -1,0 +1,8 @@
+{
+  "root": "mongodb://127.0.0.1:27018/",
+  "api": "mongodb://api_user:api_password@127.0.0.1:27018/khatha?authSource=admin",
+  "notif": "mongodb://notif_user:notif_password@127.0.0.1:27018/khatha?authSource=admin",
+  "recon": "mongodb://recon_user:recon_password@127.0.0.1:27018/khatha?authSource=admin",
+  "migration": "mongodb://migration_user:migration_password@127.0.0.1:27018/khatha?authSource=admin",
+  "readonly": "mongodb://readonly_user:readonly_password@127.0.0.1:27018/khatha?authSource=admin"
+}

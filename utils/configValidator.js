@@ -4,7 +4,8 @@ function validateConfig() {
         'MONGODB_URI',
         'JWT_SECRET',
         'ENCRYPTION_KEY',
-        'REDIS_URL'
+        'REDIS_URL',
+        'MIGRATION_SECRET'
         // 'FIREBASE_SERVER_KEY' // if mandatory
     ];
 

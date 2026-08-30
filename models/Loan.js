@@ -55,8 +55,8 @@ const LoanSchema = new mongoose.Schema({
     activatedAt: Date,
     emiAmount: { type: Number, default: 0 },
     emiAmountPaise: { type: Number, validate: { validator: Number.isInteger }, default: 0 },
-    totalPayable: { type: Number, default: 0 },
-    totalPayablePaise: { type: Number, validate: { validator: Number.isInteger }, default: 0 },
+    totalPayable: { type: Number },
+    totalPayablePaise: { type: Number, validate: { validator: Number.isInteger } },
     loanType: {
         type: String,
         default: 'personal' // e.g., 'home', 'business', 'personal'
@@ -70,35 +70,73 @@ const LoanSchema = new mongoose.Schema({
         type: String,
         required: false
     },
-    paidAmount: { type: Number, default: 0 },
-    paidAmountPaise: { type: Number, validate: { validator: Number.isInteger }, default: 0 },
-    monthsTracking: [
-        {
-            monthIndex: { type: Number, required: true },
-            status: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' },
-            markedPaidAt: Date,
-            markedBy: String
-        }
-    ],
-    transactions: [
-        {
-            type: {
-                type: String,
-                enum: ['payment', 'interest_payment', 'credit_added', 'loan_given'],
-                required: true
-            },
-            amount: { type: Number, required: true },
-    amountPaise: { type: Number, validate: { validator: Number.isInteger } },
-            note: String,
-            recordedAt: {
-                type: Date,
-                default: Date.now
-            },
-            recordedBy: String
-        }
-    ]
+    paidAmount: { type: Number },
+    paidAmountPaise: { type: Number, validate: { validator: Number.isInteger } },
+    monthsTracking: {
+        type: [
+            {
+                monthIndex: { type: Number, required: true },
+                status: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' },
+                markedPaidAt: Date,
+                markedBy: String
+            }
+        ],
+        default: undefined
+    },
+    transactions: {
+        type: [
+            {
+                type: {
+                    type: String,
+                    enum: ['payment', 'interest_payment', 'credit_added', 'loan_given'],
+                    required: true
+                },
+                amount: { type: Number, required: true },
+                amountPaise: { type: Number, validate: { validator: Number.isInteger } },
+                note: String,
+                recordedAt: {
+                    type: Date,
+                    default: Date.now
+                },
+                recordedBy: String
+            }
+        ],
+        default: undefined
+    },
+
+    // ==========================================
+    // V2 ACCOUNTING (MATERIALIZED CACHE)
+    // ==========================================
+    ledgerVersion: { type: Number, default: 1 }, // Default 1 for legacy loans
+    financialStatus: { type: String, enum: ['NORMAL', 'FROZEN'], default: 'NORMAL' },
+    
+    principalOutstandingPaise: { type: Number, default: 0, validate: [Number.isInteger, v => v >= 0] },
+    interestOutstandingPaise: { type: Number, default: 0, validate: [Number.isInteger, v => v >= 0] },
+    feesOutstandingPaise: { type: Number, default: 0, validate: [Number.isInteger, v => v >= 0] },
+    
+    agreementSnapshot: {
+        expectedPrincipalPaise: { type: Number },
+        interestRateBps: { type: Number },
+        interestMethod: { type: String, enum: ['SIMPLE_ORIGINAL_PRINCIPAL', 'NONE'] },
+        durationMonths: { type: Number },
+        scheduleId: { type: String }
+    }
 }, {
-    timestamps: true
+    timestamps: true,
+    toJSON: { 
+        virtuals: true,
+        transform: function(doc, ret) {
+            delete ret.__v;
+            return ret;
+        }
+    },
+    toObject: { 
+        virtuals: true,
+        transform: function(doc, ret) {
+            delete ret.__v;
+            return ret;
+        }
+    }
 });
 
 LoanSchema.index({ lender: 1, createdAt: -1 });

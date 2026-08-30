@@ -85,7 +85,7 @@ exports.getLoansOverview = async (req, res) => {
         stats.forEach(s => {
             distribution[s._id] = s.count;
             if (s._id === 'active') {
-                activeLoanTotalPayablePaise = s.totalPayablePaise;
+                activeLoanTotalPayablePaise = s.principalOutstandingPaise + s.interestOutstandingPaise + s.feesOutstandingPaise;
             }
         });
 

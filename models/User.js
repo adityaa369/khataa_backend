@@ -59,6 +59,13 @@ const UserSchema = new mongoose.Schema({
     passwordResetExpires: {
         type: Date,
         select: false
+    },
+    firebaseUid: {
+        type: String,
+        sparse: true,
+        unique: true,
+        index: true,
+        select: false  // not sent in API responses
     }
 }, { timestamps: true });
 
@@ -80,6 +87,34 @@ UserSchema.methods.getDecryptedKyc = function() {
         aadhar: EncryptionUtil.decrypt(this.aadhar)
     };
 };
+
+UserSchema.set('toJSON', {
+    transform: function(doc, ret) {
+        delete ret.password;
+        delete ret.pan;
+        delete ret.aadhar;
+        delete ret.fcmToken;
+        delete ret.__v;
+        delete ret.emailVerificationToken;
+        delete ret.passwordResetToken;
+        delete ret.passwordResetExpire;
+        return ret;
+    }
+});
+
+UserSchema.set('toObject', {
+    transform: function(doc, ret) {
+        delete ret.password;
+        delete ret.pan;
+        delete ret.aadhar;
+        delete ret.fcmToken;
+        delete ret.__v;
+        delete ret.emailVerificationToken;
+        delete ret.passwordResetToken;
+        delete ret.passwordResetExpire;
+        return ret;
+    }
+});
 
 module.exports = mongoose.model('User', UserSchema);
 

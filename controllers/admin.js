@@ -153,7 +153,7 @@ exports.getFinancialOverview = async (req, res) => {
     
     const loanStats = await Loan.aggregate([
         { $match: { status: 'active' } },
-        { $group: { _id: null, totalOutstandingPaise: { $sum: { $subtract: ["$totalPayablePaise", "$paidAmountPaise"] } } } }
+        { $group: { _id: null, totalOutstandingPaise: { $sum: { $add: ["$principalOutstandingPaise", "$interestOutstandingPaise", "$feesOutstandingPaise"] } } } }
     ]);
     const outstanding = loanStats[0]?.totalOutstandingPaise || 0;
 

@@ -76,25 +76,80 @@ router.post('/check-phone', lookupLimiter, async (req, res) => {
     }
 });
 
-// @desc    Update FCM Token
-// @route   POST /api/users/fcm-token
-// @access  Private
-router.post('/fcm-token', async (req, res) => {
-    try {
-        const { fcmToken } = req.body;
-        if (!fcmToken) {
-            return res.status(400).json({ success: false, message: 'Token required' });
-        }
-        await User.findOneAndUpdate(
-            { id: req.user.id },
-            { fcmToken },
-            { new: true }
-        );
-        res.status(200).json({ success: true, message: 'Token updated' });
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-    }
-});
+  // @desc    Update FCM Token
+  // @route   POST /api/users/fcm-token
+  // @access  Private
+  router.post('/fcm-token', async (req, res) => {
+      try {
+          const { fcmToken, platform, appVersion } = req.body;
+          if (!fcmToken) {
+              return res.status(400).json({ success: false, message: 'Token required' });
+          }
 
-module.exports = router;
+          const DeviceToken = require('../models/DeviceToken');
+          
+          // Deactivate this token for any other user to prevent cross-account leakage
+          await DeviceToken.updateMany(
+              { token: fcmToken, userId: { $ne: req.user._id } },
+              { $set: { active: false } }
+          );
 
+          // Upsert for current user
+          await DeviceToken.findOneAndUpdate(
+              { token: fcmToken },
+              { 
+                  userId: req.user._id,
+                  platform: platform || 'unknown',
+                  appVersion,
+                  active: true,
+                  lastSeenAt: new Date()
+              },
+              { upsert: true, new: true }
+          );
+
+          res.status(200).json({ success: true, message: 'Token updated' });
+      } catch (err) {
+          res.status(500).json({ success: false, message: err.message });
+      }
+  });
+
+  // @desc    Logout and Unbind FCM Token
+  // @route   POST /api/users/logout
+  // @access  Private
+  router.post('/logout', async (req, res) => {
+      try {
+          const { fcmToken } = req.body;
+          if (fcmToken) {
+              const DeviceToken = require('../models/DeviceToken');
+              await DeviceToken.updateOne(
+                  { token: fcmToken, userId: req.user._id },
+                  { $set: { active: false } }
+              );
+          }
+          res.status(200).json({ success: true, message: 'Logged out successfully' });
+      } catch (err) {
+          res.status(500).json({ success: false, message: err.message });
+      }
+  });
+
+  // @desc    Unbind FCM Token explicitly
+  // @route   DELETE /api/users/fcm-token
+  // @access  Private
+  router.delete('/fcm-token', async (req, res) => {
+      try {
+          const { fcmToken } = req.body;
+          if (!fcmToken) {
+              return res.status(400).json({ success: false, message: 'Token required' });
+          }
+          const DeviceToken = require('../models/DeviceToken');
+          await DeviceToken.updateOne(
+              { token: fcmToken, userId: req.user._id },
+              { $set: { active: false } }
+          );
+          res.status(200).json({ success: true, message: 'Token unbound' });
+      } catch (err) {
+          res.status(500).json({ success: false, message: err.message });
+      }
+  });
+  
+  module.exports = router;

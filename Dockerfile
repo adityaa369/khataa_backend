@@ -1,5 +1,5 @@
 # 1. Build Stage
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 # ARCH-015: Deterministic builds
@@ -7,7 +7,7 @@ RUN npm ci --only=production
 COPY . .
 
 # 2. Production Stage
-FROM node:18-alpine
+FROM node:22-alpine
 WORKDIR /app
 
 # ARCH-016: Non-root container

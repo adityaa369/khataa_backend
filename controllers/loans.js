@@ -2,7 +2,7 @@ const Notification = require('../models/Notification');
 const Loan = require('../models/Loan');
 const User = require('../models/User');
 const { sendOtp } = require('../utils/otpProvider');
-const { sendPushNotification } = require('../utils/fcm');
+
 const { updateCreditScore } = require('../utils/creditScoreCalc');
 const { sendEmail } = require('../utils/email');
 const { loanGivenTemplate, paymentRecordedTemplate, loanClosedTemplate } = require('../utils/emailTemplates');
@@ -22,32 +22,16 @@ function sendError(res, err, status = 500) {
 }
 
 // Helper to verify Firebase OTP via Identity Toolkit API
-async function verifyFirebaseOtp(verificationId, otp) {
-    const apiKey = process.env.FIREBASE_API_KEY;
-    if (!apiKey) {
-        return { success: false, message: 'Firebase API key not configured on server' };
-    }
-    const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPhoneNumber?key=${apiKey}`;
-
+async function verifyFirebaseIdToken(idToken) {
+    if (!idToken) return { success: false, message: 'Missing idToken' };
     try {
-        const response = await axios.post(url, {
-            sessionInfo: verificationId,
-            code: otp
-        });
-        
-        if (response.status === 200 && response.data && response.data.phoneNumber) {
-            return {
-                success: true,
-                phone: response.data.phoneNumber
-            };
-        }
-        return { success: false, message: 'Invalid OTP response' };
+        const admin = require('firebase-admin');
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        if (!decodedToken.phone_number) return { success: false, message: 'No phone number in token' };
+        return { success: true, phone: decodedToken.phone_number };
     } catch (err) {
-        console.error('[Firebase REST Auth] verification error:', err.response ? err.response.data : err.message);
-        const errorMsg = err.response && err.response.data && err.response.data.error 
-            ? err.response.data.error.message 
-            : err.message;
-        return { success: false, message: errorMsg };
+        console.error('[Firebase] Verify Token Error:', err.message);
+        return { success: false, message: 'Invalid idToken' };
     }
 }
 
@@ -150,6 +134,7 @@ exports.createLoan = async (req, res) => {
             borrowerAadhar,
             borrowerAddress,
             amount,
+            amountPaise: Math.round(amount * 100),
             interestRate,
             durationMonths,
             durationType,
@@ -168,16 +153,21 @@ exports.createLoan = async (req, res) => {
         const lenderName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'A lender';
 
         // Send FCM alert telling borrower setup has been initiated
-        if (borrower.fcmToken) {
-            const { sendPushNotification } = require('../utils/fcm');
-            Notification.create({ userId: borrower._id, title: 'Lender Setup Verification', body: `A credit agreement setup for â‚¹${amount} has been initiated by ${lenderName}.`, data: { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() } }).catch(err => console.log('Notification DB Error', err));
-            sendPushNotification(
-                borrower.fcmToken,
-                'Lender Setup Verification',
-                `A credit agreement setup for â‚¹${amount} has been initiated by ${lenderName}.`,
-                { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() }
-            ).catch(fcmErr => {
-                console.error('[Loans] FCM init setup push notification failed:', fcmErr.message);
+        if (borrower) {
+            Notification.create({ userId: borrower._id, title: 'Lender Setup Verification', body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`, data: { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() } }).catch(err => console.log('Notification DB Error', err));
+            
+            const NotificationOutbox = require('../models/NotificationOutbox');
+            await NotificationOutbox.create({
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                eventType: 'LOAN_INIT_OTP',
+                recipientUserId: borrower._id,
+                channel: 'PUSH',
+                payload: {
+                    title: 'Lender Setup Verification',
+                    body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
+                    loanId: loan._id.toString()
+                }
             });
         }
 
@@ -342,53 +332,27 @@ exports.getTakenLoans = async (req, res) => {
 // @access  Private (Borrower)
 exports.verifyLoan = async (req, res) => {
     try {
-        const { otp } = req.body; // Deprecated OTP validation fallback
+        const { otp } = req.body;
         const loanId = req.params.id;
-
-        const { loan, notifyParams } = await withTransaction(async (session) => {
-            const loanRecord = await Loan.findById(loanId).session(session);
-            if (!loanRecord) throw new Error('LOAN_NOT_FOUND');
-            if (loanRecord.borrowerPhone !== req.user.phone) throw new Error('UNAUTHORIZED');
-            
-            // STRICT STATE MACHINE GUARD
-            if (loanRecord.status !== 'pending_approval') {
-                throw new Error('INVALID_STATE_TRANSITION');
-            }
-
-            loanRecord.status = 'active';
-            trackFinancialEvent('LOAN_ACCEPTED', { loanId: loanRecord._id });
-            loanRecord.activatedAt = new Date();
-            loanRecord.borrower = req.user.id;
-            
-            if (!loanRecord.transactions) loanRecord.transactions = [];
-            loanRecord.transactions.push({
-                type: 'loan_given',
-                amount: loanRecord.amount,
-                amountPaise: loanRecord.amountPaise,
-                note: 'Loan activated and accepted by borrower',
-                recordedAt: new Date(),
-                recordedBy: req.user.id
-            });
-
-            await loanRecord.save({ session });
-            
-            return {
-                loan: loanRecord,
-                notifyParams: { lenderId: loanRecord.lender, borrowerName: loanRecord.borrowerName }
-            };
-        });
-
-        // External side-effects
-        await invalidateLoanCache(notifyParams.lenderId, loan.borrower);
         
-        res.status(200).json({ success: true, loan });
-    } catch (err) {
-        if (err.message === 'INVALID_STATE_TRANSITION') return res.status(400).json({ success: false, message: 'Loan cannot be activated from its current state.'});
-        if (err.message === 'UNAUTHORIZED') return res.status(403).json({ success: false, message: 'You are not authorized to verify this loan.'});
-        if (err.message === 'LOAN_NOT_FOUND') return res.status(404).json({ success: false, message: 'Loan not found.'});
+        // Hand off to FinancialLedgerService to initialize ledger balances & outbox
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+        await FinancialLedgerService.acceptLoan(loanId, req.user.id, null);
+        const loan = await Loan.findById(loanId);
 
+        await invalidateLoanCache(loan.lender, loan.borrower);
+
+        res.status(200).json({
+            success: true,
+            message: 'Loan accepted and activated successfully',
+            loan
+        });
+    } catch (err) {
         console.error('[Loans] verifyLoan Error:', err.message);
-        sendError(res, err);
+        if (err.message.includes('UNAUTHORIZED_ACTION')) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+        res.status(400).json({ success: false, message: err.message });
     }
 };
 
@@ -465,14 +429,20 @@ exports.updateProgress = async (req, res) => {
             // Send Push Notification so borrower UI refreshes automatically
             const User = require('../models/User');
             const borrowerUser = await User.findOne({ id: loan.borrower });
-            if (borrowerUser && borrowerUser.fcmToken) {
-                const { sendPushNotification } = require('../utils/fcm');
-                sendPushNotification(
-                    borrowerUser.fcmToken,
-                    'Loan Progress Updated',
-                    `Your lender has updated the repayment progress for your loan of â‚¹${loan.amount}.`,
-                    { type: 'LOAN_PROGRESS_UPDATED', loanId: loan._id.toString() }
-                ).catch(err => console.error('[Loans] FCM updateProgress notification failed:', err.message));
+            if (borrowerUser) {
+                const NotificationOutbox = require('../models/NotificationOutbox');
+                await NotificationOutbox.create({
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    eventType: 'LOAN_PROGRESS_UPDATED',
+                    recipientUserId: borrowerUser._id,
+                    channel: 'PUSH',
+                    payload: {
+                        title: 'Loan Progress Updated',
+                        body: `Your lender has updated the repayment progress for your loan of ₹${loan.amount}.`,
+                        loanId: loan._id.toString()
+                    }
+                });
             }
         }
 
@@ -489,7 +459,7 @@ exports.updateProgress = async (req, res) => {
 // @access  Private (Lender)
 exports.verifyLenderOtp = async (req, res) => {
     try {
-        const { otp, verificationId } = req.body;
+        const { idToken } = req.body;
         const loan = await Loan.findById(req.params.id);
 
         if (!loan) {
@@ -504,11 +474,7 @@ exports.verifyLenderOtp = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is not in OTP pending state' });
         }
 
-        if (!verificationId) {
-            return res.status(400).json({ success: false, message: 'verificationId is required' });
-        }
-
-        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+        const verificationResult = await verifyFirebaseIdToken(idToken);
         if (!verificationResult.success) {
             return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
         }
@@ -530,14 +496,20 @@ exports.verifyLenderOtp = async (req, res) => {
 
         // Now trigger the Push Notification to the borrower
         const borrowerUser = await User.findOne({ id: loan.borrower });
-        if (borrowerUser && borrowerUser.fcmToken) {
-            const { sendPushNotification } = require('../utils/fcm');
-            sendPushNotification(
-                borrowerUser.fcmToken,
-                'New Agreement Request',
-                `${req.user.firstName || 'Someone'} has confirmed sending you a loan out for â‚¹${loan.amount}. Tap to review and accept via Digital Signature.`,
-                { type: 'LOAN_CREATED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM verifyLenderOtp notification failed:', err.message));
+        if (borrowerUser) {
+            const NotificationOutbox = require('../models/NotificationOutbox');
+            await NotificationOutbox.create({
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                eventType: 'LOAN_CREATED',
+                recipientUserId: borrowerUser._id,
+                channel: 'PUSH',
+                payload: {
+                    title: 'New Agreement Request',
+                    body: `${req.user.firstName || 'Someone'} has confirmed sending you a loan out for ₹${loan.amount}. Tap to review and accept via Digital Signature.`,
+                    loanId: loan._id.toString()
+                }
+            });
         }
 
         res.status(200).json({
@@ -556,7 +528,7 @@ exports.verifyLenderOtp = async (req, res) => {
 // @access  Private (Lender)
 exports.closeLoan = async (req, res) => {
     try {
-        const { otp, verificationId } = req.body;
+        const { idToken } = req.body;
         const loan = await Loan.findById(req.params.id);
 
         if (!loan) {
@@ -571,11 +543,7 @@ exports.closeLoan = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is already closed' });
         }
 
-        if (!verificationId) {
-            return res.status(400).json({ success: false, message: 'verificationId is required' });
-        }
-
-        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+        const verificationResult = await verifyFirebaseIdToken(idToken);
         if (!verificationResult.success) {
             return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
         }
@@ -629,25 +597,37 @@ exports.closeLoan = async (req, res) => {
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
-        const { sendPushNotification } = require('../utils/fcm');
+        const NotificationOutbox = require('../models/NotificationOutbox');
         
-        if (req.user && req.user.fcmToken) {
-            sendPushNotification(
-                req.user.fcmToken,
-                'Agreement Closed',
-                `The loan agreement for â‚¹${loan.amount} has been successfully closed.`,
-                { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM Lender close notification failed:', err.message));
+        if (req.user) {
+            await NotificationOutbox.create({
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                eventType: 'LOAN_CLOSED',
+                recipientUserId: req.user._id,
+                channel: 'PUSH',
+                payload: {
+                    title: 'Agreement Closed',
+                    body: `The loan agreement for ₹${loan.amount} has been successfully closed.`,
+                    loanId: loan._id.toString()
+                }
+            });
         }
 
         const borrowerUser = await User.findOne({ id: loan.borrower });
-        if (borrowerUser && borrowerUser.fcmToken) {
-            sendPushNotification(
-                borrowerUser.fcmToken,
-                'Agreement Closed',
-                `Your loan agreement for â‚¹${loan.amount} has been successfully closed.`,
-                { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM Borrower close notification failed:', err.message));
+        if (borrowerUser) {
+            await NotificationOutbox.create({
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                eventType: 'LOAN_CLOSED',
+                recipientUserId: borrowerUser._id,
+                channel: 'PUSH',
+                payload: {
+                    title: 'Agreement Closed',
+                    body: `Your loan agreement for ₹${loan.amount} has been successfully closed.`,
+                    loanId: loan._id.toString()
+                }
+            });
         }
 
         res.status(200).json({ success: true, message: 'Loan successfully closed.', loan });
@@ -749,7 +729,7 @@ exports.uploadDocument = async (req, res) => {
 
 async function _handleCustomTransaction(req, res, actionType) {
     try {
-        const { amount, otp, verificationId } = req.body;
+        const { amount, idToken } = req.body;
         const amountPaise = Math.round(amount * 100);
         trackFinancialEvent('LOAN_PAYMENT_STARTED', { actionType, amountPaise });
         metrics.financial.paymentsAttempted++;
@@ -757,8 +737,8 @@ async function _handleCustomTransaction(req, res, actionType) {
         let currentLoanForOtp;
         if (actionType !== 'addCredit') {
             // Verify Firebase OTP first
-            if (!otp || !verificationId) {
-                return res.status(400).json({ success: false, message: 'OTP and verificationId are required' });
+            if (!idToken) {
+                return res.status(400).json({ success: false, message: 'idToken is required' });
             }
             
             currentLoanForOtp = await Loan.findById(req.params.id);
@@ -769,7 +749,7 @@ async function _handleCustomTransaction(req, res, actionType) {
                 return res.status(403).json({ success: false, message: 'Only lender can record payments' });
             }
 
-            const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+            const verificationResult = await verifyFirebaseIdToken(idToken);
             if (!verificationResult.success) {
                 return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
             }
@@ -808,7 +788,7 @@ async function _handleCustomTransaction(req, res, actionType) {
                 }
                 
                 // Float Fields
-                currentLoan.totalPayable = Math.max(0, currentLoan.totalPayable - amount);
+                currentLoan.totalPayable = Math.max(0, (currentLoan.totalPayable || 0) - amount);
                 currentLoan.paidAmount = (currentLoan.paidAmount || 0) + amount;
                 
                 // Paise Fields
@@ -828,7 +808,7 @@ async function _handleCustomTransaction(req, res, actionType) {
                     recordedBy: req.user.id
                 });
             } else if (actionType === 'addCredit') {
-                currentLoan.totalPayable += amount;
+                currentLoan.totalPayable = (currentLoan.totalPayable || 0) + amount;
                 currentLoan.totalPayablePaise = (currentLoan.totalPayablePaise || 0) + amountPaise;
                 
                 title = 'Credit Added';
@@ -862,13 +842,20 @@ async function _handleCustomTransaction(req, res, actionType) {
         if (loan.borrower) {
             await updateCreditScore(loan.borrower);
             const borrowerUser = await User.findOne({ id: loan.borrower });
-            if (borrowerUser && borrowerUser.fcmToken) {
-                sendPushNotification(
-                    borrowerUser.fcmToken,
-                    notifTitle,
-                    notifBody,
-                    { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
-                ).catch(e => {});
+            if (borrowerUser) {
+                const NotificationOutbox = require('../models/NotificationOutbox');
+                await NotificationOutbox.create({
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    eventType: 'LOAN_TRANSACTION',
+                    recipientUserId: borrowerUser._id,
+                    channel: 'PUSH',
+                    payload: {
+                        title: notifTitle,
+                        body: notifBody,
+                        loanId: loan._id.toString()
+                    }
+                });
             }
         }
         res.status(200).json({ success: true, loan, transactions: loan.transactions || [] });
@@ -878,8 +865,40 @@ async function _handleCustomTransaction(req, res, actionType) {
     }
 }
 
-exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'recordPayment');
-exports.addCredit = (req, res) => _handleCustomTransaction(req, res, 'addCredit');
+exports.recordPayment = async (req, res) => {
+    try {
+        const loanId = req.params.id;
+        const amountPaise = Math.round(parseFloat(req.body.amount) * 100);
+        
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+        const result = await FinancialLedgerService.recordPayment(loanId, amountPaise, req.user.id, null);
+        
+        // Return matching response format for backward compatibility
+        res.status(200).json({ success: true, loan: result.loan, transactions: result.loan.transactions || [] });
+    } catch (err) {
+        if (err.message.includes('OVERPAYMENT_REJECTED')) {
+            return res.status(400).json({ success: false, message: 'Cannot pay more than outstanding balance' });
+        }
+        console.error('[Loans] recordPayment Error:', err.message);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+exports.addCredit = async (req, res) => {
+    try {
+        const loanId = req.params.id;
+        const amountPaise = Math.round(parseFloat(req.body.amount) * 100);
+        
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+        const result = await FinancialLedgerService.addCredit(loanId, amountPaise, req.user.id, null);
+        
+        res.status(200).json({ success: true, loan: result.loan, transactions: result.loan.transactions || [] });
+    } catch (err) {
+        console.error('[Loans] addCredit Error:', err.message);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');
 
 // @desc    Toggle month status for simple visual tracking
@@ -1112,7 +1131,7 @@ exports.sendPaymentNudge = async (req, res) => {
         const Loan = require('../models/Loan');
         const User = require('../models/User');
         const Notification = require('../models/Notification');
-        const { sendPushNotification } = require('../utils/fcm');
+        
 
         const loan = await Loan.findById(loanId);
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
@@ -1141,23 +1160,23 @@ exports.sendPaymentNudge = async (req, res) => {
         if (recentNudge) {
             return res.status(429).json({ success: false, message: 'A payment nudge was already sent recently. Please wait 24 hours.' });
         }
-
         const title = 'Payment Nudge';
         const body = 'Your lender has sent you a payment nudge. Please contact your lender to discuss your next payment.';
-        
-        await Notification.create({
-            userId: borrower._id,
-            title,
-            body,
-            type: 'PAYMENT_NUDGE_SENT',
-            data: { loanId: loan._id.toString() }
-        });
-
-        if (borrower.fcmToken) {
-            sendPushNotification(borrower.fcmToken, title, body, { type: 'PAYMENT_NUDGE_SENT', loanId: loan._id.toString() })
-                .catch(fcmErr => console.error('[Loans] FCM Nudge notification failed:', fcmErr.message));
+        if (borrower) {
+            const NotificationOutbox = require('../models/NotificationOutbox');
+            await NotificationOutbox.create({
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                eventType: 'PAYMENT_NUDGE_SENT',
+                recipientUserId: borrower._id,
+                channel: 'PUSH',
+                payload: {
+                    title,
+                    body,
+                    loanId: loan._id.toString()
+                }
+            });
         }
-
         return res.status(200).json({ success: true, message: 'Payment nudge sent successfully.' });
     } catch (err) {
         console.error('[PaymentNudge] Error:', err);
@@ -1169,30 +1188,34 @@ exports.sendPaymentNudge = async (req, res) => {
 // @desc    Delete a pending loan request
 // @route   DELETE /api/loans/:id
 // @access  Private
-exports.deleteLoan = async (req, res) => {
+exports.cancelLoan = async (req, res) => {
     try {
-        const loan = await Loan.findById(req.params.id);
+        const loan = await require('../models/Loan').findById(req.params.id);
         
         if (!loan) {
             return res.status(404).json({ success: false, message: 'Loan not found' });
         }
 
-        if (loan.userId.toString() !== req.user.id && loan.lenderId.toString() !== req.user.id) {
-            return res.status(401).json({ success: false, message: 'Not authorized to delete this loan' });
+        // Must be lender or borrower
+        if (loan.lender !== req.user.id && loan.borrower !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized to cancel this loan' });
         }
 
-        if (!['pending_otp', 'pending_approval'].includes(loan.status)) {
+        // Only PENDING loans can be cancelled. 
+        if (loan.status !== 'pending') {
             return res.status(400).json({ 
                 success: false, 
-                message: 'Only pending requests can be cancelled. Active loans cannot be deleted.' 
+                code: 'MUTATION_REJECTED',
+                message: 'Only pending offers can be cancelled. Loans with financial history cannot be cancelled or deleted.' 
             });
         }
 
-        await Loan.findByIdAndDelete(req.params.id);
+        loan.status = 'cancelled';
+        await loan.save();
         
-        res.status(200).json({ success: true, data: {} });
+        res.status(200).json({ success: true, message: 'Loan cancelled successfully', loan });
     } catch (err) {
-        console.error('[Loans] Delete Error:', err.message);
+        console.error('[Loans] Cancel Error:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };

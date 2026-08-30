@@ -481,30 +481,25 @@ exports.openAuctionMonth = async (req, res) => {
         // Get all subscribers to send FCM
         const subscriptions = await ChitSubscription.find({ chitFund: chit._id, status: 'active' });
         const userIds = subscriptions.map(s => s.user);
-        const users = await User.find({ id: { $in: userIds }, fcmToken: { $exists: true, $ne: null } });
+        const users = await User.find({ id: { $in: userIds } });
 
-        // Send FCM notifications (fire and forget)
+        // Insert into NotificationOutbox
         if (users.length > 0) {
-            const admin = require('../config/firebase');
-            const tokens = users.map(u => u.fcmToken).filter(Boolean);
-            if (tokens.length > 0) {
-                try {
-                    await admin.messaging().sendEachForMulticast({
-                        tokens,
-                        notification: {
-                            title: `🔴 Live Auction Started! - ${chit.name}`,
-                            body: `Month ${monthNumber} auction is now LIVE. Bid now to win ₹${chit.totalValue.toLocaleString('en-IN')}!`,
-                        },
-                        data: {
-                            type: 'CHIT_AUCTION_START',
-                            chitId: chit._id.toString(),
-                            monthNumber: String(monthNumber),
-                        },
-                    });
-                } catch (fcmErr) {
-                    console.error('[FCM] Auction start notification failed:', fcmErr.message);
+            const NotificationOutbox = require('../models/NotificationOutbox');
+            const outboxEntries = users.map(u => ({
+                aggregateType: 'CHIT',
+                aggregateId: chit._id.toString(),
+                eventType: 'CHIT_AUCTION_START',
+                recipientUserId: u._id,
+                channel: 'PUSH',
+                payload: {
+                    title: `🔴 Live Auction Started! - ${chit.name}`,
+                    body: `Month ${monthNumber} auction is now LIVE. Bid now to win ₹${chit.totalValue.toLocaleString('en-IN')}!`,
+                    chitId: chit._id.toString(),
+                    monthNumber: String(monthNumber)
                 }
-            }
+            }));
+            await NotificationOutbox.insertMany(outboxEntries);
         }
 
         await cacheInvalidate(`chit:dashboard:${chit._id}`);
