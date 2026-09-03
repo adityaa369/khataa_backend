@@ -1294,3 +1294,34 @@ exports.cancelLoan = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
+exports.getLoanById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const loan = await Loan.findOne({ id, $or: [{ lender: req.user.id }, { borrower: req.user.id }] });
+        
+        if (!loan) {
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+        
+        const loanObj = loan.toObject ? loan.toObject() : loan;
+        const User = require('../models/User');
+        
+        if (loanObj.borrower) {
+            const borrowerUser = await User.findOne({ id: loanObj.borrower });
+            if (borrowerUser) {
+                loanObj.borrowerName = borrowerUser.firstName + ' ' + (borrowerUser.lastName || '');
+            }
+        }
+        if (loanObj.lender) {
+            const lenderUser = await User.findOne({ id: loanObj.lender });
+            if (lenderUser) {
+                loanObj.lenderName = lenderUser.firstName + ' ' + (lenderUser.lastName || '');
+            }
+        }
+        
+        res.status(200).json({ success: true, loan: loanObj });
+    } catch (err) {
+        console.error('[Loans] getLoanById Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};

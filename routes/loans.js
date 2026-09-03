@@ -5,6 +5,7 @@ const {
     createLoan,
     getGivenLoans,
     getTakenLoans,
+    getLoanById,
     getPortfolioSummary,
     verifyLoan,
     verifyLenderOtp,
@@ -33,6 +34,7 @@ router.post('/', validateCreateLoan, createLoan);
 router.get('/given', cacheMiddleware('given_loans', 300), getGivenLoans);
 router.get('/portfolio-summary', getPortfolioSummary);
 router.get('/taken', cacheMiddleware('taken_loans', 300), getTakenLoans);
+router.get('/:id', getLoanById);
 router.get('/:id/interest-schedule', getInterestSchedule);
 router.get('/:id/repayment-timeline', getRepaymentTimeline);
   router.post('/:id/verify', financialLimiter, verifyLoan);
