@@ -17,15 +17,21 @@ const parseServiceAccount = (rawEnv) => {
 };
 
 try {
+    const { getApp, getApps, initializeApp, cert } = require('firebase-admin/app');
+
     // If FIREBASE_SERVICE_ACCOUNT is provided in environment as a stringified JSON
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
         const serviceAccount = parseServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT);
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
+        if (getApps().length === 0) {
+            initializeApp({
+                credential: cert(serviceAccount)
+            });
+        }
     } else {
         // Attempt default initialization (works if GOOGLE_APPLICATION_CREDENTIALS env var points to the downloaded JSON file)
-        admin.initializeApp();
+        if (getApps().length === 0) {
+            initializeApp();
+        }
     }
 } catch (error) {
     console.error('[Firebase] Initialization Error:', error.message);
