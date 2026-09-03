@@ -1297,7 +1297,11 @@ exports.cancelLoan = async (req, res) => {
 exports.getLoanById = async (req, res) => {
     try {
         const { id } = req.params;
-        const loan = await Loan.findOne({ id, $or: [{ lender: req.user.id }, { borrower: req.user.id }] });
+        const mongoose = require('mongoose');
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+        const loan = await Loan.findOne({ _id: id, $or: [{ lender: req.user.id }, { borrower: req.user.id }] });
         
         if (!loan) {
             return res.status(404).json({ success: false, message: 'Loan not found' });
