@@ -141,7 +141,7 @@ exports.createLoan = async (req, res) => {
             loanType,
             status: 'pending_otp',
             transaction_id,
-            documentUrl,
+            documentId,
             otp: 'FIREBASE_OTP',
             isOtpVerified: false,
             monthsTracking
@@ -1022,6 +1022,81 @@ function addCalendarMonths(date, months) {
 // @desc    Get flexible repayment timeline projection for a loan
 // @route   GET /api/loans/:id/repayment-timeline
 // @access  Private (Lender & Borrower)
+
+exports.getInterestSchedule = async (req, res) => {
+    try {
+        const loan = await require('../models/Loan').findById(req.params.id);
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender !== req.user.id && loan.borrower !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        const Transaction = require('../models/Transaction');
+        
+        // Fetch all relevant transactions for the loan
+        const txs = await Transaction.find({ 
+            loanId: loan._id,
+            type: { $in: ['INTEREST_ACCRUED', 'PAYMENT', 'REVERSAL'] }
+        }).sort({ effectiveAt: 1 });
+        
+        const scheduleMap = new Map();
+        
+        for (const tx of txs) {
+            if (tx.type === 'INTEREST_ACCRUED') {
+                const date = new Date(tx.accrualEnd || tx.effectiveAt);
+                const monthKey = `${date.toLocaleString('default', { month: 'long' })} ${date.getFullYear()}`;
+                
+                if (!scheduleMap.has(monthKey)) {
+                    scheduleMap.set(monthKey, { month: monthKey, accruedPaise: 0, paidPaise: 0 });
+                }
+                scheduleMap.get(monthKey).accruedPaise += tx.amountPaise;
+            } else if (tx.type === 'PAYMENT' && tx.interestDeltaPaise < 0) {
+                const date = new Date(tx.effectiveAt);
+                const monthKey = `${date.toLocaleString('default', { month: 'long' })} ${date.getFullYear()}`;
+                
+                if (!scheduleMap.has(monthKey)) {
+                    scheduleMap.set(monthKey, { month: monthKey, accruedPaise: 0, paidPaise: 0 });
+                }
+                scheduleMap.get(monthKey).paidPaise += Math.abs(tx.interestDeltaPaise);
+            } else if (tx.type === 'REVERSAL' && tx.interestDeltaPaise > 0) {
+                // If a payment was reversed, the reversal restores interest balance (positive delta)
+                const date = new Date(tx.effectiveAt);
+                const monthKey = `${date.toLocaleString('default', { month: 'long' })} ${date.getFullYear()}`;
+                
+                if (!scheduleMap.has(monthKey)) {
+                    scheduleMap.set(monthKey, { month: monthKey, accruedPaise: 0, paidPaise: 0 });
+                }
+                scheduleMap.get(monthKey).paidPaise -= Math.abs(tx.interestDeltaPaise);
+            }
+        }
+        
+        const schedule = Array.from(scheduleMap.values());
+        
+        // Calculate totals
+        let totalAccrued = 0;
+        let totalPaid = 0;
+        for (const s of schedule) {
+            totalAccrued += s.accruedPaise;
+            totalPaid += s.paidPaise;
+        }
+
+        return res.status(200).json({
+            success: true,
+            totalAccruedPaise: totalAccrued,
+            totalPaidPaise: totalPaid,
+            outstandingInterestPaise: loan.interestOutstandingPaise,
+            originalPrincipalPaise: loan.agreementSnapshot ? loan.agreementSnapshot.expectedPrincipalPaise : loan.amount * 100,
+            interestRateBps: loan.agreementSnapshot ? loan.agreementSnapshot.interestRateBps : loan.interestRate * 100,
+            interestMethod: loan.agreementSnapshot ? loan.agreementSnapshot.interestMethod : 'SIMPLE_ORIGINAL_PRINCIPAL',
+            schedule
+        });
+
+    } catch (err) {
+        console.error('[InterestSchedule] Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
 exports.getRepaymentTimeline = async (req, res) => {
     try {
         const loan = await require('../models/Loan').findById(req.params.id);

@@ -66,7 +66,7 @@ const LoanSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
-    documentUrl: {
+    documentId: {
         type: String,
         required: false
     },

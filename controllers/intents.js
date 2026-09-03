@@ -50,3 +50,28 @@ exports.createIntent = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
+
+
+exports.getIntent = async (req, res) => {
+    try {
+        const { intentId } = req.params;
+        const intent = await TransactionIntent.findOne({ intentId });
+        
+        if (!intent) {
+            return res.status(404).json({ success: false, code: 'UNKNOWN_INTENT', message: 'Intent not found' });
+        }
+        
+        // Authorization: ensure user is either lender or borrower of the loan
+        const loan = await Loan.findById(intent.loanId);
+        if (loan) {
+            if (loan.lender.toString() !== req.user.id && loan.borrower.toString() !== req.user.id) {
+                return res.status(403).json({ success: false, message: 'Unauthorized to view this intent' });
+            }
+        }
+        
+        // Return intent state
+        res.status(200).json({ success: true, intent });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
