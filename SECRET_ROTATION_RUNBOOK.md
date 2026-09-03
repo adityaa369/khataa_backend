@@ -3,8 +3,8 @@
 ## ?? HISTORICAL EXPOSURE DETECTED (SPRINT 3.5)
 **Status:** ACTION REQUIRED
 **Findings:** The Git history of this repository contains plain text production credentials.
-1. **MongoDB Atlas:** `adityaamruthaluri369_db_user` / `eQEork9PIDcuuYvV`
-2. **JWT Secret:** `f98a2c3b4d5e6f7g8h9i0j1k2l3m4n5o`
+1. **MongoDB Atlas:** `adityaamruthaluri369_db_user` / `REDACTED`
+2. **JWT Secret:** `REDACTED`
 
 **Immediate Action:**
 - Log into MongoDB Atlas and DELETE or ROTATE the password for `adityaamruthaluri369_db_user`.

@@ -17,7 +17,7 @@ The scan targeted all source code, git history, configuration files (`.env`, `ec
 | **Migration Secret** (`x-migration-bypass`) | `middleware/MaintenanceGuard.js` | Privileged Secret | **Restricted** (IP restricted) | Clean | **Rotate/Revoke** |
 
 ### Git History Exposure 🚨
-The repository's git history contains the actual production MongoDB URI (with password `eQEork9PIDcuuYvV`) and the JWT Secret (`f98a2c3b4d5e6f7g8h9i0j1k2l3m4n5o`) in three files:
+The repository's git history contains the actual production MongoDB URI (with password `REDACTED`) and the JWT Secret (`REDACTED`) in three files:
 - `index_final.js` (Jun 5 2026, Feb 14 2026)
 - `index_hardcoded.js`
 - `clear_prod.js`

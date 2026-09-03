@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 async function testExternalMongoConnection() {
-    const uri = 'mongodb+srv://adityaamruthaluri369_db_user:eQEork9PIDcuuYvV@cluster0.lmdcdic.mongodb.net/khatha?retryWrites=true&w=majority&appName=Cluster0';
+    const uri = 'mongodb+srv://adityaamruthaluri369_db_user:REDACTED@cluster0.lmdcdic.mongodb.net/khatha?retryWrites=true&w=majority&appName=Cluster0';
     console.log('[Test] Attempting to connect to Atlas cluster from external internet...');
     try {
         await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000 });
