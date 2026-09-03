@@ -91,7 +91,7 @@ UserSchema.methods.getDecryptedKyc = function() {
 UserSchema.set('toJSON', {
     transform: function(doc, ret) {
         delete ret.password;
-        delete ret.pan;
+        ret.isKycComplete = !!(ret.pan && ret.aadhar && ret.dob); delete ret.pan;
         delete ret.aadhar;
         delete ret.fcmToken;
         delete ret.__v;
@@ -105,7 +105,7 @@ UserSchema.set('toJSON', {
 UserSchema.set('toObject', {
     transform: function(doc, ret) {
         delete ret.password;
-        delete ret.pan;
+        ret.isKycComplete = !!(ret.pan && ret.aadhar && ret.dob); delete ret.pan;
         delete ret.aadhar;
         delete ret.fcmToken;
         delete ret.__v;
