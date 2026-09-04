@@ -161,6 +161,15 @@ class FinancialLedgerService {
         return this.withTransactionRetry(async (session) => {
             const loan = await Loan.findById(loanId).session(session);
             if (!loan) throw new Error('LOAN_NOT_FOUND');
+            
+            // Legacy V1 Migration
+            if ((loan.ledgerVersion || 1) < 2) {
+                loan.principalOutstandingPaise = loan.amountPaise - (loan.paidAmountPaise || 0);
+                loan.interestOutstandingPaise = 0;
+                loan.feesOutstandingPaise = 0;
+                loan.ledgerVersion = 2;
+                await loan.save({ session });
+            }
 
             if (loan.lender.toString() !== actorId) throw new Error('UNAUTHORIZED_ACTION: Only lender can perform this');
             // Atomic Intent Consumption inside Financial Transaction

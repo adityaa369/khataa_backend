@@ -51,7 +51,7 @@ exports.createLoan = async (req, res) => {
             duration_type,
             type,
             transaction_id,
-            documentUrl
+            documentId
         } = req.body;
 
         // Sanitize phone: strip 91 or +91
@@ -139,7 +139,7 @@ exports.createLoan = async (req, res) => {
             durationMonths,
             durationType,
             loanType,
-            status: 'pending_otp',
+            status: 'pending_approval',
             transaction_id,
             documentId,
             otp: 'FIREBASE_OTP',
