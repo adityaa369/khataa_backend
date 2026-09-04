@@ -1,4 +1,4 @@
-﻿
+
 if (process.env.NODE_ENV === 'staging') {
     const mongoUri = process.env.MONGO_URI || '';
     const redisUrl = process.env.REDIS_URL || '';
@@ -192,6 +192,7 @@ const loanRoutes = require('./routes/loans');
 const creditScoreRoutes = require('./routes/creditScore');
 const userRoutes = require('./routes/users');
 const notificationRoutes = require('./routes/notifications');
+const intentRoutes = require('./routes/intents');
 const chitFundRoutes = require('./routes/chitFunds');
 
 
@@ -202,6 +203,7 @@ app.use('/api/loans', loanRoutes);
 app.use('/api/credit-score', creditScoreRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/intents', intentRoutes);
 app.use('/api/chitfunds', chitFundRoutes);
 
 // â”€â”€â”€ Health Check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
