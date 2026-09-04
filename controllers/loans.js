@@ -147,6 +147,16 @@ exports.createLoan = async (req, res) => {
             monthsTracking
         });
         
+        const TransactionIntent = require('../models/TransactionIntent');
+        const intent = await TransactionIntent.create({
+            loanId: loan._id,
+            userId: borrower.id, // borrower.id is the string ID
+            action: 'ACCEPT_LOAN',
+            payload: { amountPaise: Math.round(amount * 100) },
+            status: 'PENDING',
+            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
+        });
+
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
@@ -154,7 +164,7 @@ exports.createLoan = async (req, res) => {
 
         // Send FCM alert telling borrower setup has been initiated
         if (borrower) {
-            Notification.create({ userId: borrower._id, title: 'Lender Setup Verification', body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`, data: { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() } }).catch(err => console.log('Notification DB Error', err));
+            Notification.create({ userId: borrower._id, title: 'Lender Setup Verification', body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`, data: { type: 'LOAN_INIT_OTP', loanId: loan._id.toString(), intentId: intent.intentId } }).catch(err => console.log('Notification DB Error', err));
             
             const NotificationOutbox = require('../models/NotificationOutbox');
             await NotificationOutbox.create({
@@ -166,7 +176,8 @@ exports.createLoan = async (req, res) => {
                 payload: {
                     title: 'Lender Setup Verification',
                     body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
-                    loanId: loan._id.toString()
+                    loanId: loan._id.toString(),
+                    intentId: intent.intentId
                 }
             });
         }
@@ -1320,6 +1331,14 @@ exports.getLoanById = async (req, res) => {
             const lenderUser = await User.findOne({ id: loanObj.lender });
             if (lenderUser) {
                 loanObj.lenderName = lenderUser.firstName + ' ' + (lenderUser.lastName || '');
+            }
+        }
+        
+        if (loanObj.status === 'pending_approval' && loanObj.borrower === req.user.id) {
+            const TransactionIntent = require('../models/TransactionIntent');
+            const intent = await TransactionIntent.findOne({ loanId: loanObj._id, action: 'ACCEPT_LOAN', status: 'PENDING' });
+            if (intent) {
+                loanObj.pendingIntentId = intent.intentId;
             }
         }
         
