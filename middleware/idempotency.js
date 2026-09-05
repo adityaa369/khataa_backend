@@ -1,7 +1,17 @@
-﻿const IdempotencyKey = require('../models/IdempotencyKey');
+const IdempotencyKey = require('../models/IdempotencyKey');
 const crypto = require('crypto');
 const { triggerAlert } = require('../utils/telemetry');
+const logger = require('../utils/logger');
 const { metrics } = require('./metrics');
+
+// Simple deterministic JSON stringifier for canonical hashing
+const stringifyDeterministic = (obj) => {
+    if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+    if (Array.isArray(obj)) return '[' + obj.map(stringifyDeterministic).join(',') + ']';
+    const keys = Object.keys(obj).sort();
+    const parts = keys.map(k => JSON.stringify(k) + ':' + stringifyDeterministic(obj[k]));
+    return '{' + parts.join(',') + '}';
+};
 
 const requireIdempotency = async (req, res, next) => {
     const key = req.headers['x-idempotency-key'];
@@ -11,6 +21,10 @@ const requireIdempotency = async (req, res, next) => {
     }
     
     const userId = req.user ? req.user.id : 'anonymous';
+    
+    // Generate canonical payload hash
+    const canonicalBody = stringifyDeterministic(req.body || {});
+    const payloadHash = crypto.createHash('sha256').update(canonicalBody).digest('hex');
 
     try {
         let record;
@@ -19,10 +33,13 @@ const requireIdempotency = async (req, res, next) => {
             record = await IdempotencyKey.create({
                 key: key,
                 user: userId,
+                payloadHash: payloadHash,
                 requestPath: req.originalUrl,
                 status: 'IN_PROGRESS'
             });
             isNewRecord = true;
+            // Also enrich context with idempotency key
+            require('../utils/asyncContext').updateTraceContext({ idempotencyKey: key });
         } catch (err) {
             if (err.code === 11000) {
                 record = await IdempotencyKey.findOne({ key, user: userId });
@@ -34,31 +51,43 @@ const requireIdempotency = async (req, res, next) => {
             }
         }
 
-        if (record.status === 'COMPLETED') {
-            console.log(`[Idempotency] Returning cached response for key: ${key}`);
-            
-            // Increment process memory metric
-            metrics.financial.idempotencyReplays++;
-            
-            // Persist telemetry hook asynchronously, never breaking the flow
-            try {
-                const keyHash = crypto.createHash('sha256').update(key).digest('hex');
-                const actorId = req.user ? req.user.id : (req.admin ? req.admin._id : 'anonymous');
-                triggerAlert('IDEMPOTENCY_REPLAY', 'LOW', { 
-                    idempotencyKeyHash: keyHash, 
-                    path: req.originalUrl,
-                    actorId: actorId,
-                    reason: 'cached_response_replay'
+        if (!isNewRecord) {
+            // Conflict check
+            if (record.payloadHash !== payloadHash) {
+                logger.error({
+                    type: 'operational_anomaly',
+                    anomaly: 'idempotency_conflict',
+                    severity: 'HIGH',
+                    idempotencyKey: key,
+                    userId,
+                    path: req.originalUrl
                 });
-            } catch (e) {
-                // Ignore telemetry failure to protect the functional idempotency flow
+                return res.status(409).json({ 
+                    success: false, 
+                    code: 'IDEMPOTENCY_CONFLICT',
+                    message: 'A previous request with this idempotency key had a conflicting payload.' 
+                });
             }
 
-            return res.status(record.responseStatus || 200).json(record.responseBody);
-        }
+            if (record.status === 'COMPLETED') {
+                logger.info({
+                    type: 'idempotency_replay',
+                    idempotencyKey: key,
+                    path: req.originalUrl,
+                    userId
+                });
+                
+                metrics.financial.idempotencyReplays++;
+                return res.status(record.responseStatus || 200).json(record.responseBody);
+            }
 
-        if (!isNewRecord && record.status === 'IN_PROGRESS' && record._id.toString() !== (req.idempotencyRecordId || '')) {
-            return res.status(409).json({ success: false, message: 'A transaction with this idempotency key is already in progress. Please wait.' });
+            if (record.status === 'IN_PROGRESS' && record._id.toString() !== (req.idempotencyRecordId || '')) {
+                return res.status(409).json({ 
+                    success: false, 
+                    code: 'IDEMPOTENCY_CONFLICT',
+                    message: 'A transaction with this idempotency key is already in progress. Please wait.' 
+                });
+            }
         }
 
         req.idempotencyRecordId = record._id.toString();
@@ -81,4 +110,3 @@ const requireIdempotency = async (req, res, next) => {
 };
 
 module.exports = { requireIdempotency };
-

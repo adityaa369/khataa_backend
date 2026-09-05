@@ -9,6 +9,7 @@ const IdempotencyKeySchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    payloadHash: { type: String, required: true },
     requestPath: {
         type: String,
         required: true

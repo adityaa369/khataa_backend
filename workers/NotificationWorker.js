@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const NotificationOutbox = require('../models/NotificationOutbox');
 const DeviceToken = require('../models/DeviceToken');
@@ -10,6 +11,32 @@ const LEASE_MS = 2 * 60 * 1000; // 2 minutes
 
 class NotificationWorker {
     static async processOutbox() {
+        const { asyncLocalStorage } = require('../utils/asyncContext');
+        const logger = require('../utils/logger');
+        const jobId = crypto.randomUUID();
+        const start = Date.now();
+
+        return new Promise((resolve) => {
+            asyncLocalStorage.run({ requestId: jobId, jobName: 'notification_outbox' }, async () => {
+                logger.info({ type: 'worker_start' });
+                let success = false;
+                try {
+                    success = await this._processOutboxImpl();
+                } catch(e) {
+                    logger.error({ type: 'operational_anomaly', anomaly: 'outbox_fatal_error', message: e.message, severity: 'HIGH' });
+                } finally {
+                    logger.info({
+                        type: 'worker_complete',
+                        durationMs: Date.now() - start,
+                        processedCount: success ? 1 : 0
+                    });
+                    resolve(success);
+                }
+            });
+        });
+    }
+
+    static async _processOutboxImpl() {
         const now = new Date();
         const leaseTimeout = new Date(now.getTime() - LEASE_MS);
 

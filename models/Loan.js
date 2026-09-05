@@ -117,7 +117,9 @@ const LoanSchema = new mongoose.Schema({
     agreementSnapshot: {
         expectedPrincipalPaise: { type: Number },
         interestRateBps: { type: Number },
-        interestMethod: { type: String, enum: ['SIMPLE_ORIGINAL_PRINCIPAL', 'NONE'] },
+        monthlyInterestRateBps: { type: Number },
+        constantPrincipalPortionPaise: { type: Number },
+        interestMethod: { type: String, enum: ['SIMPLE_ORIGINAL_PRINCIPAL', 'REDUCING_BALANCE', 'NONE'] },
         durationMonths: { type: Number },
         scheduleId: { type: String }
     }

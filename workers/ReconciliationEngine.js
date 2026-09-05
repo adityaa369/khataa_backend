@@ -1,18 +1,14 @@
 const mongoose = require('mongoose');
 const Loan = require('../models/Loan');
 const Transaction = require('../models/Transaction');
+const logger = require('../utils/logger');
 
 class ReconciliationEngine {
-    /**
-     * Independently aggregates the immutable ledger and compares it against the materialized cache.
-     * Drops the FROZEN hammer on any discrepancy.
-     */
     static async runReconciliation() {
         const loans = await Loan.find({ ledgerVersion: 2, financialStatus: 'NORMAL' });
         const results = { verified: 0, frozen: 0 };
 
         for (const loan of loans) {
-            // 1. Independent Aggregation
             const [agg] = await Transaction.aggregate([
                 { $match: { loanId: loan._id } },
                 { 
@@ -29,18 +25,39 @@ class ReconciliationEngine {
             const ledgerI = agg ? agg.totalI : 0;
             const ledgerF = agg ? agg.totalF : 0;
 
-            // 2. Exact Component Comparison
             const isMatch = (
                 ledgerP === loan.principalOutstandingPaise &&
                 ledgerI === loan.interestOutstandingPaise &&
                 ledgerF === loan.feesOutstandingPaise
             );
+            
+            const isNegative = (
+                ledgerP < 0 || loan.principalOutstandingPaise < 0 ||
+                ledgerI < 0 || loan.interestOutstandingPaise < 0 ||
+                ledgerF < 0 || loan.feesOutstandingPaise < 0
+            );
 
-            // 3. Freeze on 1-Paise Mismatch
-            if (!isMatch) {
-                console.error(`[CRITICAL] Reconciliation Failure Loan ${loan._id}. Ledger: ${ledgerP}/${ledgerI}/${ledgerF} | Cache: ${loan.principalOutstandingPaise}/${loan.interestOutstandingPaise}/${loan.feesOutstandingPaise}`);
+            if (!isMatch || isNegative) {
+                if (!isMatch) {
+                    logger.error({
+                        type: 'operational_anomaly',
+                        anomaly: 'reconciliation_mismatch',
+                        loanId: loan._id.toString(),
+                        principalMismatch: ledgerP !== loan.principalOutstandingPaise,
+                        interestMismatch: ledgerI !== loan.interestOutstandingPaise,
+                        feeMismatch: ledgerF !== loan.feesOutstandingPaise,
+                        severity: 'CRITICAL'
+                    });
+                }
+                if (isNegative) {
+                    logger.error({
+                        type: 'operational_anomaly',
+                        anomaly: 'negative_balance_anomaly',
+                        loanId: loan._id.toString(),
+                        severity: 'CRITICAL'
+                    });
+                }
                 
-                // Freeze atomically
                 await Loan.updateOne(
                     { _id: loan._id, financialStatus: 'NORMAL' },
                     { $set: { financialStatus: 'FROZEN' } }
