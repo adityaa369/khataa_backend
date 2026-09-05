@@ -558,6 +558,7 @@ exports.verifyLenderOtp = async (req, res) => {
 // @route   POST /api/loans/:id/close
 // @access  Private (Lender)
 exports.closeLoan = async (req, res) => {
+    require('../utils/asyncContext').updateTraceContext({ loanId: req.params.id });
     try {
         const { idToken } = req.body;
         const loan = await Loan.findById(req.params.id);
@@ -897,6 +898,7 @@ async function _handleCustomTransaction(req, res, actionType) {
 }
 
 exports.recordPayment = async (req, res) => {
+    require('../utils/asyncContext').updateTraceContext({ loanId: req.params.id });
     try {
         const loanId = req.params.id;
         const amountPaise = Math.round(parseFloat(req.body.amount) * 100);
@@ -917,6 +919,7 @@ exports.recordPayment = async (req, res) => {
 };
 
 exports.addCredit = async (req, res) => {
+    require('../utils/asyncContext').updateTraceContext({ loanId: req.params.id });
     try {
         const loanId = req.params.id;
         const amountPaise = Math.round(parseFloat(req.body.amount) * 100);
@@ -1328,6 +1331,7 @@ exports.cancelLoan = async (req, res) => {
     }
 };
 exports.getLoanById = async (req, res) => {
+    require('../utils/asyncContext').updateTraceContext({ loanId: req.params.id });
     try {
         const { id } = req.params;
         const mongoose = require('mongoose');

@@ -32,6 +32,8 @@ const protect = async (req, res, next) => {
             return res.status(401).json({ success: false, message: 'User account not found' });
         }
 
+        const { updateTraceContext } = require('../utils/asyncContext');
+        updateTraceContext({ userId: req.user.id });
         next();
     } catch (err) {
         if (err.name === 'TokenExpiredError') {

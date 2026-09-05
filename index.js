@@ -230,15 +230,14 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // â”€â”€â”€ Global Error Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const errorHandler = require('./middleware/errorHandler');
 app.use((err, req, res, next) => {
     if (err.message === 'Not allowed by CORS') {
-        return res.status(403).json({ success: false, message: 'CORS policy violation' });
+        return res.status(403).json({ success: false, message: 'CORS policy violation', code: 'CORS_ERROR' });
     }
-    if (process.env.NODE_ENV !== 'production') {
-        console.error(`[GLOBAL ERROR] ${req.method} ${req.url}:`, err.message);
-    }
-    res.status(500).json({ success: false, message: 'Internal Server Error' });
+    next(err);
 });
+app.use(errorHandler);
 
 // â”€â”€â”€ MongoDB Connection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const initAuctionEngine = require('./sockets/auctionEngine');
@@ -293,7 +292,7 @@ async function bootServer() {
     }
 }
 
-bootServer();
+if (process.env.NODE_ENV !== 'test') { bootServer(); } module.exports = app;
 
 // ---------------- Graceful Shutdown ----------------
 function gracefulShutdown(signal) {
