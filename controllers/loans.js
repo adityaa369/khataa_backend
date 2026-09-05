@@ -38,6 +38,24 @@ async function verifyFirebaseIdToken(idToken) {
 // @desc    Create a new loan
 // @route   POST /api/loans
 // @access  Private (Lender)
+
+const fetchV2TransactionsAsLegacy = async (loanId) => {
+    const Transaction = require('../models/Transaction');
+    const txs = await Transaction.find({ loanId }).sort({ sequenceNumber: 1, effectiveAt: 1 });
+    return txs.map(tx => ({
+        type: tx.type.toLowerCase(),
+        amountPaise: tx.amountPaise,
+        note: tx.type === 'LOAN_CREATED' ? 'Loan Issued'
+            : tx.type === 'INTEREST_ACCRUED' ? 'Interest Accrued'
+            : tx.type === 'CREDIT_ADDED' ? 'Credit Added'
+            : tx.type === 'WRITE_OFF' ? 'Write Off'
+            : tx.type === 'REVERSAL' ? 'Reversal'
+            : 'Payment Recorded',
+        recordedAt: tx.effectiveAt,
+        recordedBy: tx.actorId
+    }));
+};
+
 exports.createLoan = async (req, res) => {
     try {
         let {
@@ -491,11 +509,13 @@ exports.verifyLenderOtp = async (req, res) => {
         }
 
         const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
-        const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
-        if (returnedPhone !== loanPhone) {
+        const User = require('../models/User');
+        const lenderUser = await User.findById(req.user.id);
+        const expectedPhone = lenderUser.phone.replace(/\D/g, '').slice(-10);
+        if (returnedPhone !== expectedPhone) {
             return res.status(400).json({
                 success: false,
-                message: `OTP verified phone (+91${returnedPhone}) does not match borrower phone (+91${loanPhone})`
+                message: 'OTP verified phone does not match lender phone'
             });
         }
 
@@ -568,23 +588,23 @@ exports.closeLoan = async (req, res) => {
             });
         }
 
-        loan.status = 'completed';
-        loan.progress = 1.0;
-        loan.isOtpVerified = true; // reusing field just to mark full authentication
+        loan.isOtpVerified = true;
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+        await FinancialLedgerService.writeOffAndClose(loan._id, req.user.id, null);
         
+        const refreshedLoan = await Loan.findById(loan._id);
         
         try {
             const { generateAndUploadClosureCertificate } = require('../utils/pdfGenerator');
-            const pdfUrl = await generateAndUploadClosureCertificate(loan);
-            if (pdfUrl) {
-                // If there's an existing document string, we append or replace. We'll replace it.
-                loan.documentUrl = pdfUrl; 
+            const pdfKey = await generateAndUploadClosureCertificate(refreshedLoan);
+            if (pdfKey) {
+                // Store opaque storage key, NOT a public URL
+                refreshedLoan.documentId = pdfKey;
+                await refreshedLoan.save();
             }
         } catch (pdfErr) {
             console.error('[Loans] PDF generation failed, skipping:', pdfErr);
         }
-
-        await loan.save();
 
         // Send closure confirmation email
         try {
@@ -641,7 +661,8 @@ exports.closeLoan = async (req, res) => {
             });
         }
 
-        res.status(200).json({ success: true, message: 'Loan successfully closed.', loan });
+        const legacyTxs = await fetchV2TransactionsAsLegacy(loan._id);
+        res.status(200).json({ success: true, message: 'Loan successfully closed.', loan: normalizeLoan(refreshedLoan || loan), transactions: legacyTxs });
     } catch (err) {
         console.error('[Loans] closeLoan Error:', err.message);
         sendError(res, err);
@@ -697,38 +718,37 @@ exports.uploadDocument = async (req, res) => {
         try {
             const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
             const bucket = admin.storage().bucket(bucketName);
-            const file = bucket.file(filename);
+            // Opaque UUID storage key — original filename never exposed
+            const { v4: uuidv4 } = require('uuid');
+            const storageKey = `documents/${uuidv4()}${require('path').extname(sanitizedName).toLowerCase()}`;
+            const file = bucket.file(storageKey);
 
             await file.save(buffer, {
                 metadata: {
                     contentType: fileType || 'image/jpeg',
-                },
-                public: true
+                    metadata: { uploadedBy: req.user ? req.user.id : 'unknown' }
+                }
+                // SECURITY FIX: NO public: true — object is private by default
             });
-            await file.makePublic();
-            const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filename}`;
-            console.log(`[Upload] Uploaded successfully to Firebase: ${publicUrl}`);
-            return res.status(200).json({ success: true, url: publicUrl });
+            // SECURITY FIX: NO file.makePublic()
+            // SECURITY FIX: NO public URL — return opaque documentId only
+            console.log(`[Upload] Uploaded privately to Firebase: ${storageKey}`);
+            return res.status(200).json({ success: true, documentId: storageKey });
         } catch (firebaseError) {
-            console.error('[Upload] Firebase upload failed (billing delinquent or config issue):', firebaseError.message);
-            
-            // Fallback to local storage
+            console.error('[Upload] Firebase upload failed:', firebaseError.message);
+
+            // Fallback: local storage, opaque UUID key, NOT a public HTTP URL
             const uploadsDir = path.join(__dirname, '..', 'uploads');
             if (!fs.existsSync(uploadsDir)) {
                 fs.mkdirSync(uploadsDir, { recursive: true });
             }
-
-            const localFilename = `${Date.now()}_${sanitizedName}`;
+            const { v4: uuidv4 } = require('uuid');
+            const localFilename = `${uuidv4()}${require('path').extname(sanitizedName).toLowerCase()}`;
             const localPath = path.join(uploadsDir, localFilename);
             fs.writeFileSync(localPath, buffer);
-
-            // Determine server URL prefix
-            const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-            const host = req.get('host');
-            const localUrl = `${protocol}://${host}/uploads/${localFilename}`;
-            console.log(`[Upload] Fallback: saved locally at ${localUrl}`);
-
-            return res.status(200).json({ success: true, url: localUrl });
+            const localDocumentId = `local/${localFilename}`;
+            console.log(`[Upload] Fallback: saved locally with key ${localDocumentId}`);
+            return res.status(200).json({ success: true, documentId: localDocumentId });
         }
     } catch (err) {
         console.error('[Upload] Controller Error:', err.message);
@@ -885,7 +905,8 @@ exports.recordPayment = async (req, res) => {
         const result = await FinancialLedgerService.recordPayment(loanId, amountPaise, req.user.id, null);
         
         // Return matching response format for backward compatibility
-        res.status(200).json({ success: true, loan: result.loan, transactions: result.loan.transactions || [] });
+        const legacyTxs = await fetchV2TransactionsAsLegacy(result.loan._id);
+        res.status(200).json({ success: true, loan: normalizeLoan(result.loan), transactions: legacyTxs });
     } catch (err) {
         if (err.message.includes('OVERPAYMENT_REJECTED')) {
             return res.status(400).json({ success: false, message: 'Cannot pay more than outstanding balance' });
@@ -903,7 +924,8 @@ exports.addCredit = async (req, res) => {
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         const result = await FinancialLedgerService.addCredit(loanId, amountPaise, req.user.id, null);
         
-        res.status(200).json({ success: true, loan: result.loan, transactions: result.loan.transactions || [] });
+        const legacyTxs = await fetchV2TransactionsAsLegacy(result.loan._id);
+        res.status(200).json({ success: true, loan: normalizeLoan(result.loan), transactions: legacyTxs });
     } catch (err) {
         console.error('[Loans] addCredit Error:', err.message);
         res.status(500).json({ success: false, message: err.message });
@@ -1288,7 +1310,7 @@ exports.cancelLoan = async (req, res) => {
         }
 
         // Only PENDING loans can be cancelled. 
-        if (loan.status !== 'pending') {
+        if (!['pending', 'pending_approval', 'pending_otp'].includes(loan.status)) {
             return res.status(400).json({ 
                 success: false, 
                 code: 'MUTATION_REJECTED',
@@ -1342,7 +1364,8 @@ exports.getLoanById = async (req, res) => {
             }
         }
         
-        res.status(200).json({ success: true, loan: loanObj });
+        const legacyTxs = await fetchV2TransactionsAsLegacy(loanObj._id);
+        res.status(200).json({ success: true, loan: normalizeLoan(loanObj), transactions: legacyTxs });
     } catch (err) {
         console.error('[Loans] getLoanById Error:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });

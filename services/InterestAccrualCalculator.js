@@ -12,19 +12,26 @@
 class InterestAccrualCalculator {
 
     /**
-     * Calculates simple interest for a period using ACT/365 with the
-     * original-principal basis from the agreementSnapshot.
+     * Calculates interest for a period.
      *
-     * @param {object} agreementSnapshot - Immutable loan agreement
+     * For REDUCING_BALANCE: uses ACT/365 daily interest on loan.principalOutstandingPaise.
+     * For SIMPLE_ORIGINAL_PRINCIPAL (legacy): uses agreementSnapshot.expectedPrincipalPaise.
+     *
+     * @param {object} loan - The full loan document (with agreementSnapshot and principalOutstandingPaise)
      * @param {Date} startDate - Inclusive start of accrual period
      * @param {Date} endDate - Exclusive end of accrual period
      * @returns {{ roundedInterestPaise: number, elapsedDays: number, periodId: string }}
      */
-    static calculate(agreementSnapshot, startDate, endDate) {
-        if (!agreementSnapshot || agreementSnapshot.interestMethod !== 'SIMPLE_ORIGINAL_PRINCIPAL') {
-            throw new Error('ACCRUAL_CALC_REJECTED: Not a simple-interest loan');
+    static calculate(loan, startDate, endDate) {
+        const agreementSnapshot = loan.agreementSnapshot;
+        if (!agreementSnapshot) throw new Error('ACCRUAL_CALC_REJECTED: Missing agreementSnapshot');
+        const { interestMethod } = agreementSnapshot;
+        if (interestMethod !== 'REDUCING_BALANCE' && interestMethod !== 'SIMPLE_ORIGINAL_PRINCIPAL') {
+            throw new Error('ACCRUAL_CALC_REJECTED: Not a supported interest loan');
         }
-        if (!(startDate instanceof Date) || !(endDate instanceof Date)) {
+        // Use duck-type check instead of instanceof, which breaks when global.Date is mocked in tests
+        if (typeof startDate !== 'object' || typeof startDate.getTime !== 'function' ||
+            typeof endDate !== 'object' || typeof endDate.getTime !== 'function') {
             throw new Error('ACCRUAL_CALC_ERROR: Invalid date types');
         }
 
@@ -35,8 +42,16 @@ class InterestAccrualCalculator {
             return { roundedInterestPaise: 0, elapsedDays: 0, periodId: null };
         }
 
-        const rateDecimal = agreementSnapshot.interestRateBps / 10000;
-        const rawInterest = agreementSnapshot.expectedPrincipalPaise * rateDecimal * (elapsedDays / 365);
+        let rawInterest;
+        if (interestMethod === 'REDUCING_BALANCE') {
+            // nominalAnnualRateBps = monthlyInterestRateBps * 12
+            const nominalAnnualRateBps = (agreementSnapshot.monthlyInterestRateBps || 0) * 12;
+            rawInterest = loan.principalOutstandingPaise * nominalAnnualRateBps * elapsedDays / (10000 * 365);
+        } else {
+            // Legacy SIMPLE_ORIGINAL_PRINCIPAL: flat rate on original principal
+            const rateDecimal = agreementSnapshot.interestRateBps / 10000;
+            rawInterest = agreementSnapshot.expectedPrincipalPaise * rateDecimal * (elapsedDays / 365);
+        }
         const roundedInterestPaise = Math.round(rawInterest);
 
         // Canonical period ID — same format as InterestAccrualWorker.

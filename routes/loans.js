@@ -51,6 +51,7 @@ router.post('/:id/add-credit', validatePaymentAmount, addCredit);
 router.patch('/:id/months/:monthIndex', protect, toggleMonthStatus);
 router.post('/upload-document', uploadDocument);
 router.post('/:id/cancel', cancelLoan);
+router.delete('/:id', cancelLoan);
 
 module.exports = router;
 

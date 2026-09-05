@@ -19,16 +19,14 @@ exports.getPaymentsOverview = async (req, res) => {
         const [committedCount, rejectedCount, loanAgg] = await Promise.all([
             SecurityEvent.countDocuments({ eventType: 'LOAN_PAYMENT_COMMITTED', createdAt: { $gte: timeWindow } }),
             SecurityEvent.countDocuments({ eventType: 'OVERPAYMENT_ATTEMPT', createdAt: { $gte: timeWindow } }), // e.g., rejected payments
-            Loan.aggregate([
-                { $match: { updatedAt: { $gte: timeWindow } } },
-                { $unwind: "$transactions" },
+            require('../models/Transaction').aggregate([
                 { 
                     $match: { 
-                        "transactions.type": { $in: ["payment", "interest_payment"] },
-                        "transactions.recordedAt": { $gte: timeWindow }
+                        type: { $in: ["PAYMENT"] },
+                        effectiveAt: { $gte: timeWindow }
                     } 
                 },
-                { $group: { _id: null, volume: { $sum: "$transactions.amountPaise" } } }
+                { $group: { _id: null, volume: { $sum: "$amountPaise" } } }
             ])
         ]);
 
@@ -85,7 +83,7 @@ exports.getLoansOverview = async (req, res) => {
         stats.forEach(s => {
             distribution[s._id] = s.count;
             if (s._id === 'active') {
-                activeLoanTotalPayablePaise = s.principalOutstandingPaise + s.interestOutstandingPaise + s.feesOutstandingPaise;
+                activeLoanTotalPayablePaise = s.totalOutstandingPaise;
             }
         });
 

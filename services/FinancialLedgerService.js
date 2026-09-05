@@ -74,19 +74,22 @@ class FinancialLedgerService {
 
             // CREDIT TYPE VALIDATION & IMMUTABLE AGREEMENT SNAPSHOT
             const creditType = loan.loanType || 'HAND';
-            let interestRateBps = loan.interestRate || 0; 
+            let interestRateBps = loan.interestRate || 0;
+            let monthlyInterestRateBps = 0;
             let interestMethod = 'NONE';
+            let constantPrincipalPortionPaise = 0;
 
-            if (creditType === 'INTEREST') {
-                if (interestRateBps < 0 || interestRateBps > 3600) {
+            if (creditType === 'interest_credit' || creditType === 'INTEREST' || creditType === 'INTEREST_CREDIT') {
+                monthlyInterestRateBps = Math.round(interestRateBps * 100);
+                if (monthlyInterestRateBps < 0 || monthlyInterestRateBps > 3600) {
                     throw new Error('VALIDATION_ERROR: Interest rate must be between 0 and 3600 bps');
                 }
-                if (!Number.isInteger(interestRateBps)) {
-                    throw new Error('VALIDATION_ERROR: Interest rate must be an integer');
-                }
-                interestMethod = 'SIMPLE_ORIGINAL_PRINCIPAL';
+                interestMethod = 'REDUCING_BALANCE';
+                const dur = Math.max(1, loan.durationMonths || 1);
+                constantPrincipalPortionPaise = Math.round(initialPrincipalPaise / dur);
             } else {
                 interestRateBps = 0;
+                monthlyInterestRateBps = 0;
                 interestMethod = 'NONE';
             }
 
@@ -94,7 +97,10 @@ class FinancialLedgerService {
                 creditType,
                 expectedPrincipalPaise: initialPrincipalPaise,
                 interestRateBps,
-                interestMethod
+                monthlyInterestRateBps,
+                interestMethod,
+                durationMonths: loan.durationMonths,
+                constantPrincipalPortionPaise
             };
 
             return await this._commitMutation({
@@ -116,11 +122,12 @@ class FinancialLedgerService {
         });
     }
 
-    static async addCredit(loanId, additionalPrincipalPaise, actorId, intentId) {
+    static async addCredit(loanId, additionalPrincipalPaise, actorId, intentId, effectiveAtOverride = null) {
         this.validateMonetaryInput(additionalPrincipalPaise);
         return this.withTransactionRetry(async (session) => {
             const loan = await Loan.findById(loanId).session(session);
             if (!loan) throw new Error('LOAN_NOT_FOUND');
+            const creditEffectiveAt = effectiveAtOverride || new Date();
 
             if (loan.lender.toString() !== actorId) throw new Error('UNAUTHORIZED_ACTION: Only lender can perform this');
             // Atomic Intent Consumption inside Financial Transaction
@@ -138,13 +145,51 @@ class FinancialLedgerService {
             if (loan.lender.toString() !== actorId) throw new Error('UNAUTHORIZED_ACTION: Only lender can perform this');
             if (loan.status !== 'active') throw new Error('LOAN_NOT_ACTIVE');
 
+            // Batch 2B: Pre-credit interest accrual for REDUCING_BALANCE loans
+            if (loan.agreementSnapshot && loan.agreementSnapshot.interestMethod === 'REDUCING_BALANCE') {
+                const InterestAccrualCalculator = require('./InterestAccrualCalculator');
+                const lastAccrualTx = await Transaction.findOne({ loanId: loan._id, type: 'INTEREST_ACCRUED' }).sort({ accrualEnd: -1 }).session(session);
+                const accrualWindow = InterestAccrualCalculator.determineFinalAccrualWindow(loan, lastAccrualTx, creditEffectiveAt);
+                if (accrualWindow.needsAccrual) {
+                    const { roundedInterestPaise, periodId } = InterestAccrualCalculator.calculate(loan, accrualWindow.startDate, accrualWindow.endDate);
+                    if (roundedInterestPaise > 0) {
+                        try {
+                            await this._commitMutation({
+                                loan,
+                                type: 'INTEREST_ACCRUED',
+                                deltas: { principal: 0, interest: roundedInterestPaise, fees: 0 },
+                                amountPaise: roundedInterestPaise,
+                                actorId: 'SYSTEM',
+                                effectiveAt: accrualWindow.endDate,
+                                accrualPeriodId: periodId,
+                                accrualStart: accrualWindow.startDate,
+                                accrualEnd: accrualWindow.endDate
+                            }, session);
+                        } catch (e) {
+                            if (!(e.code === 11000 && e.message.includes('accrualPeriodId'))) throw e;
+                        }
+                    }
+                }
+            }
+
+            // Batch 2B: Recalculate CPP on Add Credit for REDUCING_BALANCE loans
+            if (loan.agreementSnapshot && loan.agreementSnapshot.interestMethod === 'REDUCING_BALANCE') {
+                loan.agreementSnapshot.expectedPrincipalPaise += additionalPrincipalPaise;
+                const now = creditEffectiveAt;
+                const end = loan.endDate || new Date(now.getFullYear() + 1, now.getMonth(), now.getDate());
+                const remainingMonths = Math.max(1, Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 30)));
+                loan.agreementSnapshot.constantPrincipalPortionPaise = Math.round(
+                    (loan.principalOutstandingPaise + additionalPrincipalPaise) / remainingMonths
+                );
+            }
+
             return await this._commitMutation({
                 loan,
                 type: 'CREDIT_ADDED',
                 deltas: { principal: additionalPrincipalPaise, interest: 0, fees: 0 },
                 amountPaise: additionalPrincipalPaise,
                 actorId,
-                effectiveAt: new Date(),
+                effectiveAt: creditEffectiveAt,
                 intentId,
                 notification: {
                     recipientId: loan.borrower,
@@ -156,11 +201,12 @@ class FinancialLedgerService {
         });
     }
 
-    static async recordPayment(loanId, paymentAmountPaise, actorId, intentId) {
+    static async recordPayment(loanId, paymentAmountPaise, actorId, intentId, effectiveAtOverride = null) {
         this.validateMonetaryInput(paymentAmountPaise);
         return this.withTransactionRetry(async (session) => {
             const loan = await Loan.findById(loanId).session(session);
             if (!loan) throw new Error('LOAN_NOT_FOUND');
+            const paymentEffectiveAt = effectiveAtOverride || new Date();
             
             // Legacy V1 Migration
             if ((loan.ledgerVersion || 1) < 2) {
@@ -186,6 +232,44 @@ class FinancialLedgerService {
             }
 
             if (loan.lender.toString() !== actorId) throw new Error('UNAUTHORIZED_ACTION: Only lender can perform this');
+
+            // Batch 2B: Pre-payment interest accrual for REDUCING_BALANCE loans
+            if (loan.agreementSnapshot && loan.agreementSnapshot.interestMethod === 'REDUCING_BALANCE') {
+                const InterestAccrualCalculator = require('./InterestAccrualCalculator');
+                const lastAccrualTx = await Transaction.findOne({ loanId: loan._id, type: 'INTEREST_ACCRUED' }).sort({ accrualEnd: -1 }).session(session);
+                const closeDate = paymentEffectiveAt;
+                const accrualWindow = InterestAccrualCalculator.determineFinalAccrualWindow(loan, lastAccrualTx, closeDate);
+                if (accrualWindow.needsAccrual) {
+                    const { roundedInterestPaise, periodId } = InterestAccrualCalculator.calculate(loan, accrualWindow.startDate, accrualWindow.endDate);
+                    if (roundedInterestPaise > 0) {
+                        try {
+                            await this._commitMutation({
+                                loan,
+                                type: 'INTEREST_ACCRUED',
+                                deltas: { principal: 0, interest: roundedInterestPaise, fees: 0 },
+                                amountPaise: roundedInterestPaise,
+                                actorId: 'SYSTEM',
+                                effectiveAt: accrualWindow.endDate,
+                                accrualPeriodId: periodId,
+                                accrualStart: accrualWindow.startDate,
+                                accrualEnd: accrualWindow.endDate
+                            }, session);
+                        } catch (e) {
+                            if (!(e.code === 11000 && e.message.includes('accrualPeriodId'))) throw e;
+                        }
+                    }
+                }
+            }
+
+            // Compute minimum due (before applying payment) for deficit tracking
+            let minimumDue = 0;
+            if (loan.agreementSnapshot && loan.agreementSnapshot.interestMethod === 'REDUCING_BALANCE') {
+                let cpp = loan.agreementSnapshot.constantPrincipalPortionPaise || 0;
+                // Final period: CPP cannot exceed remaining principal
+                if (loan.principalOutstandingPaise < cpp) cpp = loan.principalOutstandingPaise;
+                minimumDue = cpp + loan.interestOutstandingPaise + loan.feesOutstandingPaise + (loan.minimumDeficitPaise || 0);
+            }
+
             let remaining = paymentAmountPaise;
             
             const feeAlloc = Math.min(remaining, loan.feesOutstandingPaise);
@@ -201,13 +285,18 @@ class FinancialLedgerService {
                 throw new Error('OVERPAYMENT_REJECTED: Amount exceeds outstanding debt');
             }
 
+            // Batch 2B: Record deficit (obligation-tracking only, not a financial balance)
+            if (loan.agreementSnapshot && loan.agreementSnapshot.interestMethod === 'REDUCING_BALANCE') {
+                loan.minimumDeficitPaise = Math.max(0, minimumDue - paymentAmountPaise);
+            }
+
             return await this._commitMutation({
                 loan,
                 type: 'PAYMENT',
                 deltas: { principal: pAlloc * -1, interest: intAlloc * -1, fees: feeAlloc * -1 },
                 amountPaise: paymentAmountPaise,
                 actorId,
-                effectiveAt: new Date(),
+                effectiveAt: paymentEffectiveAt,
                 intentId,
                 notification: {
                     recipientId: loan.borrower,
@@ -219,10 +308,11 @@ class FinancialLedgerService {
         });
     }
 
-    static async writeOffAndClose(loanId, actorId, intentId) {
+    static async writeOffAndClose(loanId, actorId, intentId, effectiveAtOverride = null) {
         return this.withTransactionRetry(async (session) => {
             const loan = await Loan.findById(loanId).session(session);
             if (!loan) throw new Error('LOAN_NOT_FOUND');
+            const closeEffectiveAt = effectiveAtOverride || new Date();
 
             if (loan.lender.toString() !== actorId) throw new Error('UNAUTHORIZED_ACTION: Only lender can perform this');
             // Atomic Intent Consumption inside Financial Transaction
@@ -246,7 +336,7 @@ class FinancialLedgerService {
             // captured by the cron worker before computing write-off.
             // This is ATOMIC with the WRITE_OFF in the same session.
             // -------------------------------------------------------
-            if (loan.agreementSnapshot && loan.agreementSnapshot.interestMethod === 'SIMPLE_ORIGINAL_PRINCIPAL') {
+            if (loan.agreementSnapshot && (loan.agreementSnapshot.interestMethod === 'SIMPLE_ORIGINAL_PRINCIPAL' || loan.agreementSnapshot.interestMethod === 'REDUCING_BALANCE')) {
                 const InterestAccrualCalculator = require('./InterestAccrualCalculator');
 
                 // Find the last accrual transaction within this session/snapshot
@@ -255,12 +345,11 @@ class FinancialLedgerService {
                     type: 'INTEREST_ACCRUED'
                 }).sort({ accrualEnd: -1 }).session(session);
 
-                const closeDate = new Date();
-                const window = InterestAccrualCalculator.determineFinalAccrualWindow(loan, lastAccrualTx, closeDate);
+                const window = InterestAccrualCalculator.determineFinalAccrualWindow(loan, lastAccrualTx, closeEffectiveAt);
 
                 if (window.needsAccrual) {
                     const { roundedInterestPaise, periodId } = InterestAccrualCalculator.calculate(
-                        loan.agreementSnapshot,
+                        loan,
                         window.startDate,
                         window.endDate
                     );
@@ -311,7 +400,7 @@ class FinancialLedgerService {
                 deltas: { principal: pAlloc * -1, interest: intAlloc * -1, fees: feeAlloc * -1 },
                 amountPaise: totalWriteOff,
                 actorId,
-                effectiveAt: new Date(),
+                effectiveAt: closeEffectiveAt,
                 intentId,
                 targetState: 'closed' 
             }, session);
@@ -374,7 +463,7 @@ class FinancialLedgerService {
             if (!loan) throw new Error('LOAN_NOT_FOUND');
 
             // Cron-triggered: no intent required — SYSTEM actorId
-            if (!loan.agreementSnapshot || loan.agreementSnapshot.interestMethod !== 'SIMPLE_ORIGINAL_PRINCIPAL') {
+            if (!loan.agreementSnapshot || (loan.agreementSnapshot.interestMethod !== 'SIMPLE_ORIGINAL_PRINCIPAL' && loan.agreementSnapshot.interestMethod !== 'REDUCING_BALANCE')) {
                 throw new Error('ACCRUAL_REJECTED: NOT_AN_INTEREST_LOAN');
             }
 
@@ -387,7 +476,7 @@ class FinancialLedgerService {
                 : endDate;
 
             const { roundedInterestPaise } = InterestAccrualCalculator.calculate(
-                loan.agreementSnapshot, startDate, effectiveEnd
+                loan, startDate, effectiveEnd
             );
 
             if (roundedInterestPaise <= 0) return { success: false, reason: 'ZERO_INTEREST' };
