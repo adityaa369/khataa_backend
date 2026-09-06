@@ -61,20 +61,17 @@ app.use(helmet({
 }));
 
 // â”€â”€â”€ CORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const allowedOrigins = [
-    'https://khataa-backend.onrender.com',
-    // Add your future web dashboard URL here if needed
-];
+const allowedOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['https://khataa-backend.onrender.com'];
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (mobile apps, Postman, server-to-server)
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
+        if (!origin && process.env.NODE_ENV !== 'production') return callback(null, true);
+        if (!origin && process.env.NODE_ENV === 'production') return callback(null, true); // Allow mobile app
+        if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) return callback(null, true);
         return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id', 'x-dev-key'],
 }));
 
 // â”€â”€â”€ Rate Limiting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -208,12 +205,12 @@ app.use('/api/intents', intentRoutes);
 app.use('/api/chitfunds', chitFundRoutes);
 app.use('/api/operational', operationalRoutes);
 
-// â”€â”€â”€ Health Check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-app.get('/api/dev/redis-status', (req, res) => { try { const { getRedisClient, isRedisAvailable } = require('./config/redis'); const client = getRedisClient(); res.json({ available: isRedisAvailable(), status: client ? client.status : 'null' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+// ————————————————————————————————————————————————————————————————————————————————
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 
-// â”€â”€â”€ Dev-only DB Clear (NEVER in production) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ————————————————————————————————————————————————————————————————————————————————
 if (process.env.NODE_ENV !== 'production') {
+    app.get('/api/dev/redis-status', (req, res) => { try { const { getRedisClient, isRedisAvailable } = require('./config/redis'); const client = getRedisClient(); res.json({ available: isRedisAvailable(), status: client ? client.status : 'null' }); } catch(e) { res.status(500).json({ error: e.message }); } });
     app.get('/api/dev/clear-db', async (req, res) => {
         const devKey = req.headers['x-dev-key'];
         if (!devKey || devKey !== process.env.DEV_CLEAR_KEY) {

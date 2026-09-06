@@ -46,6 +46,11 @@ const requireRole = (...roles) => {
 };
 
 const requireMFA = (req, res, next) => {
+    // Fail-closed for high-risk roles
+    const isHighRisk = ['SUPER_ADMIN', 'OPS_ADMIN'].includes(req.admin.role);
+    if (isHighRisk && !req.adminSession.mfaVerified) {
+        return res.status(403).json({ success: false, message: 'MFA verification strictly required for high-risk administrative roles' });
+    }
     if (req.admin.mfaEnabled && !req.adminSession.mfaVerified) {
         return res.status(403).json({ success: false, message: 'MFA verification required for this operation' });
     }

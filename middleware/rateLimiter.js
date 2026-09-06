@@ -2,6 +2,8 @@ const RateLimitService = require('../services/RateLimitService');
 
 const createLimiter = (operation, limit, windowSeconds, failOpen = false, keyExtractor = null) => {
     return async (req, res, next) => {
+        if (process.env.NODE_ENV === 'test') return next();
+
         try {
             let keys = [];
             

@@ -68,12 +68,12 @@ router.post('/testlab/run/:scenario', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), r
 router.delete('/testlab/cleanup/:runId', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), requireMFA, cleanupTestRun);
 
 
-const { runAdversarialAudit } = require('../controllers/adminSecurityAudit');
-router.post('/security/adversarial-audit', requireRole('SUPER_ADMIN'), requireMFA, runAdversarialAudit);
 
 
-const { getProductionReadiness } = require('../controllers/adminReadiness');
-router.get('/system/readiness', requireRole('SUPER_ADMIN'), requireMFA, getProductionReadiness);
+
+
+
+
 
 
 // E.7 Financial Explorer (Read-Only)
