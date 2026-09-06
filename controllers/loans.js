@@ -13,6 +13,15 @@ const { metrics } = require('../middleware/metrics');
 const { withTransaction } = require('../utils/dbTransaction');
 const { cacheGet, cacheSet, cacheInvalidate } = require('../config/redis');
 
+const normalizeLoan = (loan) => {
+    let obj = loan;
+    if (loan && typeof loan.toObject === 'function') obj = loan.toObject();
+    if (obj && obj.amountPaise === undefined && obj.amount !== undefined) {
+        obj.amountPaise = require('../utils/money').parseRupeesToPaise(obj.amount);
+    }
+    return obj;
+};
+
 function sendError(res, err, status = 500) {
     const isProd = process.env.NODE_ENV === 'production';
     return res.status(status).json({
@@ -22,6 +31,10 @@ function sendError(res, err, status = 500) {
 }
 
 // Helper to verify Firebase OTP via Identity Toolkit API
+module.exports._verifyFirebaseIdToken = async function(idToken) {
+    return verifyFirebaseIdToken(idToken);
+};
+
 async function verifyFirebaseIdToken(idToken) {
     if (!idToken) return { success: false, message: 'Missing idToken' };
     try {
@@ -152,7 +165,7 @@ exports.createLoan = async (req, res) => {
             borrowerAadhar,
             borrowerAddress,
             amount,
-            amountPaise: Math.round(amount * 100),
+            amountPaise: require('../utils/money').parseRupeesToPaise(amount),
             interestRate,
             durationMonths,
             durationType,
@@ -170,7 +183,7 @@ exports.createLoan = async (req, res) => {
             loanId: loan._id,
             userId: borrower.id, // borrower.id is the string ID
             action: 'ACCEPT_LOAN',
-            payload: { amountPaise: Math.round(amount * 100) },
+            payload: { amountPaise: require('../utils/money').parseRupeesToPaise(amount) },
             status: 'PENDING',
             expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
         });
@@ -366,7 +379,15 @@ exports.verifyLoan = async (req, res) => {
         
         // Hand off to FinancialLedgerService to initialize ledger balances & outbox
         const FinancialLedgerService = require('../services/FinancialLedgerService');
-        await FinancialLedgerService.acceptLoan(loanId, req.user.id, null);
+        const { intentId } = req.body;
+        if (!otp || !intentId) return res.status(400).json({ success: false, message: 'OTP and intentId are required' });
+        const { verifyFirebaseIdToken } = require('../middleware/auth');
+        const vResult = await module.exports._verifyFirebaseIdToken(otp);
+        if (!vResult.success) return res.status(400).json({ success: false, message: 'Invalid OTP' });
+        const Loan = require('../models/Loan');
+        const currentLoan = await Loan.findById(loanId);
+        if (vResult.phone.replace(/\D/g, '').slice(-10) !== currentLoan.borrowerPhone.replace(/\D/g, '').slice(-10)) return res.status(400).json({ success: false, message: 'OTP phone mismatch' });
+        await FinancialLedgerService.acceptLoan(loanId, req.user.id, intentId);
         const loan = await Loan.findById(loanId);
 
         await invalidateLoanCache(loan.lender, loan.borrower);
@@ -503,7 +524,7 @@ exports.verifyLenderOtp = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is not in OTP pending state' });
         }
 
-        const verificationResult = await verifyFirebaseIdToken(idToken);
+        const verificationResult = await module.exports._verifyFirebaseIdToken(idToken);
         if (!verificationResult.success) {
             return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
         }
@@ -575,7 +596,7 @@ exports.closeLoan = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is already closed' });
         }
 
-        const verificationResult = await verifyFirebaseIdToken(idToken);
+        const verificationResult = await module.exports._verifyFirebaseIdToken(idToken);
         if (!verificationResult.success) {
             return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
         }
@@ -759,149 +780,11 @@ exports.uploadDocument = async (req, res) => {
 
 // â”€â”€â”€ Custom Payment Transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function _handleCustomTransaction(req, res, actionType) {
-    try {
-        const { amount, idToken } = req.body;
-        const amountPaise = Math.round(amount * 100);
-        trackFinancialEvent('LOAN_PAYMENT_STARTED', { actionType, amountPaise });
-        metrics.financial.paymentsAttempted++;
-
-        let currentLoanForOtp;
-        if (actionType !== 'addCredit') {
-            // Verify Firebase OTP first
-            if (!idToken) {
-                return res.status(400).json({ success: false, message: 'idToken is required' });
-            }
-            
-            currentLoanForOtp = await Loan.findById(req.params.id);
-            if (!currentLoanForOtp) {
-                return res.status(404).json({ success: false, message: 'Loan not found' });
-            }
-            if (currentLoanForOtp.lender !== req.user.id) {
-                return res.status(403).json({ success: false, message: 'Only lender can record payments' });
-            }
-
-            const verificationResult = await verifyFirebaseIdToken(idToken);
-            if (!verificationResult.success) {
-                return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
-            }
-
-            const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
-            const loanPhone = currentLoanForOtp.borrowerPhone.replace(/\D/g, '').slice(-10);
-            if (returnedPhone !== loanPhone) {
-                return res.status(400).json({
-                    success: false,
-                    message: `OTP verified phone (+91${returnedPhone}) does not match borrower phone (+91${loanPhone})`
-                });
-            }
-        } else {
-            currentLoanForOtp = await Loan.findById(req.params.id);
-            if (!currentLoanForOtp) {
-                return res.status(404).json({ success: false, message: 'Loan not found' });
-            }
-            if (currentLoanForOtp.lender !== req.user.id) {
-                return res.status(403).json({ success: false, message: 'Only lender can record payments' });
-            }
-        }
-
-        const { loan, notifTitle, notifBody } = await withTransaction(async (session) => {
-            const currentLoan = await Loan.findById(req.params.id).session(session);
-            if (!currentLoan) throw new Error('LOAN_NOT_FOUND');
-            if (currentLoan.lender !== req.user.id) throw new Error('UNAUTHORIZED');
-            
-            let title = 'Transaction Complete';
-            let body = '';
-
-            if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-                if (amount > currentLoan.totalPayable || amountPaise > currentLoan.totalPayablePaise) {
-                    triggerAlert('OVERPAYMENT_ATTEMPT', 'CRITICAL', { actionType, amountPaise, loanId: id });
-                    metrics.financial.paymentsRejected++;
-                    throw new Error('OVERPAYMENT_PROHIBITED');
-                }
-                
-                // Float Fields
-                currentLoan.totalPayable = Math.max(0, (currentLoan.totalPayable || 0) - amount);
-                currentLoan.paidAmount = (currentLoan.paidAmount || 0) + amount;
-                
-                // Paise Fields
-                currentLoan.totalPayablePaise = Math.max(0, (currentLoan.totalPayablePaise || 0) - amountPaise);
-                currentLoan.paidAmountPaise = (currentLoan.paidAmountPaise || 0) + amountPaise;
-
-                title = 'Payment Recorded';
-                body = `Your lender recorded a payment of ?${amount}. Your remaining balance is ?${currentLoan.totalPayable}.`;
-                
-                if (!currentLoan.transactions) currentLoan.transactions = [];
-                currentLoan.transactions.push({
-                    type: actionType === 'recordInterest' ? 'interest_payment' : 'payment',
-                    amount,
-                    amountPaise,
-                    note: actionType === 'recordInterest' ? 'Interest payment' : 'Principal payment',
-                    recordedAt: new Date(),
-                    recordedBy: req.user.id
-                });
-            } else if (actionType === 'addCredit') {
-                currentLoan.totalPayable = (currentLoan.totalPayable || 0) + amount;
-                currentLoan.totalPayablePaise = (currentLoan.totalPayablePaise || 0) + amountPaise;
-                
-                title = 'Credit Added';
-                body = `Your lender added a credit of ?${amount}. Your total payable is now ?${currentLoan.totalPayable}.`;
-                
-                if (!currentLoan.transactions) currentLoan.transactions = [];
-                currentLoan.transactions.push({
-                    type: 'credit_added',
-                    amount,
-                    amountPaise,
-                    note: 'Credit added by lender',
-                    recordedAt: new Date(),
-                    recordedBy: req.user.id
-                });
-            }
-
-            if (currentLoan.totalPayablePaise <= 0) {
-                currentLoan.status = 'completed';
-                currentLoan.progress = 1.0;
-            }
-
-            await currentLoan.save({ session });
-            trackFinancialEvent('LOAN_PAYMENT_COMMITTED', { loanId: currentLoan._id, amountPaise });
-            metrics.financial.paymentsCommitted++;
-            return { loan: currentLoan, notifTitle: title, notifBody: body };
-        });
-
-        // External Side Effects (Emails, Notifications)
-        await invalidateLoanCache(loan.lender, loan.borrower);
-        
-        if (loan.borrower) {
-            await updateCreditScore(loan.borrower);
-            const borrowerUser = await User.findOne({ id: loan.borrower });
-            if (borrowerUser) {
-                const NotificationOutbox = require('../models/NotificationOutbox');
-                await NotificationOutbox.create({
-                    aggregateType: 'LOAN',
-                    aggregateId: loan._id.toString(),
-                    eventType: 'LOAN_TRANSACTION',
-                    recipientUserId: borrowerUser._id,
-                    channel: 'PUSH',
-                    payload: {
-                        title: notifTitle,
-                        body: notifBody,
-                        loanId: loan._id.toString()
-                    }
-                });
-            }
-        }
-        res.status(200).json({ success: true, loan, transactions: loan.transactions || [] });
-    } catch (err) {
-        if (err.message === 'OVERPAYMENT_PROHIBITED') return res.status(400).json({ success: false, message: 'Cannot pay more than outstanding balance' });
-        sendError(res, err);
-    }
-}
-
 exports.recordPayment = async (req, res) => {
     require('../utils/asyncContext').updateTraceContext({ loanId: req.params.id });
     try {
         const loanId = req.params.id;
-        const amountPaise = Math.round(parseFloat(req.body.amount) * 100);
+        const amountPaise = Number(req.body.amountPaise); // Strictly validated by isInt in validatePaymentAmount
         
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         const result = await FinancialLedgerService.recordPayment(loanId, amountPaise, req.user.id, null);
@@ -922,10 +805,18 @@ exports.addCredit = async (req, res) => {
     require('../utils/asyncContext').updateTraceContext({ loanId: req.params.id });
     try {
         const loanId = req.params.id;
-        const amountPaise = Math.round(parseFloat(req.body.amount) * 100);
+        const amountPaise = Number(req.body.amountPaise); // Strictly validated by isInt in validatePaymentAmount
         
         const FinancialLedgerService = require('../services/FinancialLedgerService');
-        const result = await FinancialLedgerService.addCredit(loanId, amountPaise, req.user.id, null);
+        const { intentId, idToken } = req.body;
+        if (!intentId || !idToken) return res.status(400).json({ success: false, message: 'Intent ID and OTP required' });
+        const { verifyFirebaseIdToken } = require('../middleware/auth');
+        const vResult = await module.exports._verifyFirebaseIdToken(idToken);
+        if (!vResult.success) return res.status(400).json({ success: false, message: 'Invalid OTP' });
+        const Loan = require('../models/Loan');
+        const currentLoan = await Loan.findById(loanId);
+        if (vResult.phone.replace(/\D/g, '').slice(-10) !== currentLoan.borrowerPhone.replace(/\D/g, '').slice(-10)) return res.status(400).json({ success: false, message: 'OTP phone mismatch' });
+        const result = await FinancialLedgerService.addCredit(loanId, amountPaise, req.user.id, intentId);
         
         const legacyTxs = await fetchV2TransactionsAsLegacy(result.loan._id);
         res.status(200).json({ success: true, loan: normalizeLoan(result.loan), transactions: legacyTxs });
@@ -935,7 +826,7 @@ exports.addCredit = async (req, res) => {
     }
 };
 
-exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');
+
 
 // @desc    Toggle month status for simple visual tracking
 // @route   PATCH /api/loans/:id/months/:monthIndex
@@ -1202,7 +1093,7 @@ exports.getRepaymentTimeline = async (req, res) => {
                 for (const period of timeline) {
                     if (txDate >= period.periodStart && txDate < period.periodEnd) {
                         period.transactions.push(tx);
-                        period.totalPaidPaise += (tx.amountPaise || Math.round(tx.amount * 100));
+                        period.totalPaidPaise += (tx.amountPaise || require('../utils/money').parseRupeesToPaise(tx.amount));
                         period.hasPayments = true;
                         period.status = 'RECORDED';
                         matched = true;

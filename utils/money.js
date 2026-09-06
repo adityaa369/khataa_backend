@@ -1,51 +1,39 @@
-/**
- * Money Standardization Utility
- * Fintech applications must NEVER use floating-point math for financial values.
- * All monetary values must be stored, transferred, and calculated in their smallest unit (Paise for INR).
- */
-
-class Money {
-    /**
-     * Converts a Rupee value (float/double) to Paise (Integer)
-     * e.g., 50.50 -> 5050
-     */
-    static toPaise(rupees) {
-        if (rupees === null || rupees === undefined || isNaN(rupees)) {
-            throw new Error('Invalid money amount provided');
-        }
-        // Math.round prevents 0.1 + 0.2 = 0.30000000000000004 issues
-        return Math.round(parseFloat(rupees) * 100);
+exports.parseRupeesToPaise = (rupees) => {
+    if (rupees === undefined || rupees === null) return 0;
+    const str = String(rupees).trim();
+    if (str === '') return 0;
+    if (str.includes('e') || str.includes('E')) return 0; // reject scientific
+    if (str === 'NaN' || str === 'Infinity' || str === '-Infinity') return 0;
+    
+    let sign = 1;
+    let s = str;
+    if (s.startsWith('-')) {
+        sign = -1;
+        s = s.substring(1);
     }
-
-    /**
-     * Converts a Paise value (Integer) to Rupees (Float)
-     * e.g., 5050 -> 50.50
-     */
-    static toRupees(paise) {
-        if (!Number.isInteger(paise)) {
-            throw new Error('Paise must be an integer');
-        }
-        return paise / 100;
+    
+    const parts = s.split('.');
+    if (parts.length > 2) return 0; // invalid format
+    
+    let r = parseInt(parts[0] || '0', 10);
+    if (isNaN(r)) return 0;
+    
+    let p = 0;
+    if (parts.length === 2) {
+        let decimalPart = parts[1].substring(0, 2);
+        if (decimalPart.length === 1) decimalPart += '0';
+        p = parseInt(decimalPart, 10);
+        if (isNaN(p)) p = 0;
     }
+    
+    return sign * ((r * 100) + p);
+};
 
-    /**
-     * Safely allocate a sum of money among N parties without losing a penny.
-     * Useful for dividing a Chit Fund dividend where 10000 paise / 3 members = 3333.333...
-     * Returns an array of integers: [3334, 3333, 3333]
-     */
-    static allocate(paiseAmount, parties) {
-        if (!Number.isInteger(paiseAmount)) throw new Error('Amount must be an integer (paise)');
-        if (parties <= 0) throw new Error('Parties must be > 0');
-
-        const baseShare = Math.floor(paiseAmount / parties);
-        const remainder = paiseAmount % parties;
-        
-        const shares = Array(parties).fill(baseShare);
-        for (let i = 0; i < remainder; i++) {
-            shares[i]++;
-        }
-        return shares;
-    }
-}
-
-module.exports = Money;
+exports.formatPaiseToString = (paise) => {
+    if (paise === undefined || paise === null || isNaN(paise)) return '0.00';
+    const p = Math.abs(Math.floor(Number(paise)));
+    const sign = paise < 0 ? '-' : '';
+    const r = Math.floor(p / 100);
+    const cents = String(p % 100).padStart(2, '0');
+    return sign + r + '.' + cents;
+};

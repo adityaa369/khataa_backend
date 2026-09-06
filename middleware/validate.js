@@ -49,6 +49,7 @@ const validateCreateLoan = [
 const validatePaymentAmount = [
     body('amountPaise').notEmpty().not().isArray().withMessage('Amount cannot be an array').withMessage('amountPaise is required').isInt({ min: 1, max: 100000000000 }).withMessage('amountPaise must be a positive integer in paise'),
     body('idToken').optional().isString(),   // Firebase ID token (Admin SDK path — replaces old sessionInfo+otp)
+    body('intentId').optional().isString(),  // TransactionIntent UUID for borrower consent
     body('otp').optional().isString(),        // kept for backward-compat route detection only
     body('verificationId').optional().isString(), // kept for backward-compat route detection only
     handleValidationErrors

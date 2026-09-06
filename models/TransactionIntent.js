@@ -8,7 +8,7 @@ const intentSchema = new mongoose.Schema({
     action: { type: String, enum: ['ACCEPT_LOAN', 'ADD_CREDIT', 'RECORD_PAYMENT', 'CLOSE_LOAN', 'WRITE_OFF', 'REVERSE'], required: true },
     
     payload: {
-        amountPaise: { type: Number, required: true, validate: Number.isInteger },
+        amountPaise: { type: Number, validate: { validator: Number.isInteger, message: 'amountPaise must be an integer' } },
         metadata: { type: mongoose.Schema.Types.Mixed, default: {} }
     },
     

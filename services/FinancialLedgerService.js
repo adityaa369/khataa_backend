@@ -78,6 +78,7 @@ class FinancialLedgerService {
             let monthlyInterestRateBps = 0;
             let interestMethod = 'NONE';
             let constantPrincipalPortionPaise = 0;
+            let cppRemainderPaise = 0;
 
             if (creditType === 'interest_credit' || creditType === 'INTEREST' || creditType === 'INTEREST_CREDIT') {
                 monthlyInterestRateBps = Math.round(interestRateBps * 100);
@@ -86,7 +87,9 @@ class FinancialLedgerService {
                 }
                 interestMethod = 'REDUCING_BALANCE';
                 const dur = Math.max(1, loan.durationMonths || 1);
-                constantPrincipalPortionPaise = Math.round(initialPrincipalPaise / dur);
+                constantPrincipalPortionPaise = Math.floor(initialPrincipalPaise / dur);
+                cppRemainderPaise = initialPrincipalPaise % dur;
+                
             } else {
                 interestRateBps = 0;
                 monthlyInterestRateBps = 0;
@@ -100,7 +103,8 @@ class FinancialLedgerService {
                 monthlyInterestRateBps,
                 interestMethod,
                 durationMonths: loan.durationMonths,
-                constantPrincipalPortionPaise
+                constantPrincipalPortionPaise,
+                cppRemainderPaise
             };
 
             return await this._commitMutation({
@@ -116,7 +120,7 @@ class FinancialLedgerService {
                     recipientId: loan.lender,
                     eventType: 'LOAN_ACCEPTED',
                     title: 'Loan Accepted',
-                    body: `The borrower has accepted the loan of ₹${(initialPrincipalPaise / 100).toFixed(2)}.`
+                    body: `The borrower has accepted the loan of ₹${require('../utils/money').formatPaiseToString(initialPrincipalPaise)}.`
                 }
             }, session);
         });
@@ -178,9 +182,9 @@ class FinancialLedgerService {
                 const now = creditEffectiveAt;
                 const end = loan.endDate || new Date(now.getFullYear() + 1, now.getMonth(), now.getDate());
                 const remainingMonths = Math.max(1, Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 30)));
-                loan.agreementSnapshot.constantPrincipalPortionPaise = Math.round(
-                    (loan.principalOutstandingPaise + additionalPrincipalPaise) / remainingMonths
-                );
+                const newTotal = loan.principalOutstandingPaise + additionalPrincipalPaise;
+                loan.agreementSnapshot.constantPrincipalPortionPaise = Math.floor(newTotal / remainingMonths);
+                loan.agreementSnapshot.cppRemainderPaise = newTotal % remainingMonths;
             }
 
             return await this._commitMutation({
@@ -195,7 +199,7 @@ class FinancialLedgerService {
                     recipientId: loan.borrower,
                     eventType: 'CREDIT_ADDED',
                     title: 'Credit Added',
-                    body: `Your lender added a credit of ₹${(additionalPrincipalPaise / 100).toFixed(2)}.`
+                    body: `Your lender added a credit of ₹${require('../utils/money').formatPaiseToString(additionalPrincipalPaise)}.`
                 }
             }, session);
         });
@@ -265,8 +269,13 @@ class FinancialLedgerService {
             let minimumDue = 0;
             if (loan.agreementSnapshot && loan.agreementSnapshot.interestMethod === 'REDUCING_BALANCE') {
                 let cpp = loan.agreementSnapshot.constantPrincipalPortionPaise || 0;
-                // Final period: CPP cannot exceed remaining principal
-                if (loan.principalOutstandingPaise < cpp) cpp = loan.principalOutstandingPaise;
+                let cppRem = loan.agreementSnapshot.cppRemainderPaise || 0;
+                // Final period: absorb remainder if remaining balance is close to CPP
+                if (loan.principalOutstandingPaise <= cpp + cppRem) {
+                    cpp = loan.principalOutstandingPaise;
+                } else if (loan.principalOutstandingPaise < cpp) {
+                    cpp = loan.principalOutstandingPaise;
+                }
                 minimumDue = cpp + loan.interestOutstandingPaise + loan.feesOutstandingPaise + (loan.minimumDeficitPaise || 0);
             }
 
@@ -302,7 +311,7 @@ class FinancialLedgerService {
                     recipientId: loan.borrower,
                     eventType: 'PAYMENT_COMMITTED',
                     title: 'Payment Recorded',
-                    body: `Your lender recorded a payment of ₹${(paymentAmountPaise / 100).toFixed(2)}.`
+                    body: `Your lender recorded a payment of ₹${require('../utils/money').formatPaiseToString(paymentAmountPaise)}.`
                 }
             }, session);
         });

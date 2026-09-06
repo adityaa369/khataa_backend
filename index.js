@@ -348,15 +348,9 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-process.on('uncaughtException', (err) => {
-    console.error('[FATAL] Uncaught Exception:', err);
-    gracefulShutdown('uncaughtException');
-});
 
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('[FATAL] Unhandled Rejection:', reason);
-    gracefulShutdown('unhandledRejection');
-});
+
+
 
 
 
