@@ -194,6 +194,7 @@ const userRoutes = require('./routes/users');
 const notificationRoutes = require('./routes/notifications');
 const intentRoutes = require('./routes/intents');
 const chitFundRoutes = require('./routes/chitFunds');
+const operationalRoutes = require('./routes/operational');
 
 
 
@@ -205,6 +206,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/intents', intentRoutes);
 app.use('/api/chitfunds', chitFundRoutes);
+app.use('/api/operational', operationalRoutes);
 
 // â”€â”€â”€ Health Check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get('/api/dev/redis-status', (req, res) => { try { const { getRedisClient, isRedisAvailable } = require('./config/redis'); const client = getRedisClient(); res.json({ available: isRedisAvailable(), status: client ? client.status : 'null' }); } catch(e) { res.status(500).json({ error: e.message }); } });

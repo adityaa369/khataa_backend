@@ -1,3 +1,4 @@
+const { fireAlert } = require('../utils/AlertManager');
 const mongoose = require('mongoose');
 const Loan = require('../models/Loan');
 const Transaction = require('../models/Transaction');
@@ -39,22 +40,18 @@ class ReconciliationEngine {
 
             if (!isMatch || isNegative) {
                 if (!isMatch) {
-                    logger.error({
-                        type: 'operational_anomaly',
-                        anomaly: 'reconciliation_mismatch',
+                    await fireAlert('RECONCILIATION_MISMATCH', loan._id.toString(), {
                         loanId: loan._id.toString(),
                         principalMismatch: ledgerP !== loan.principalOutstandingPaise,
                         interestMismatch: ledgerI !== loan.interestOutstandingPaise,
                         feeMismatch: ledgerF !== loan.feesOutstandingPaise,
-                        severity: 'CRITICAL'
+                        subsystem: 'ReconciliationEngine'
                     });
                 }
                 if (isNegative) {
-                    logger.error({
-                        type: 'operational_anomaly',
-                        anomaly: 'negative_balance_anomaly',
+                    await fireAlert('NEGATIVE_BALANCE', loan._id.toString(), {
                         loanId: loan._id.toString(),
-                        severity: 'CRITICAL'
+                        subsystem: 'ReconciliationEngine'
                     });
                 }
                 

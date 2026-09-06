@@ -1,3 +1,4 @@
+const { fireAlert } = require('../utils/AlertManager');
 const IdempotencyKey = require('../models/IdempotencyKey');
 const crypto = require('crypto');
 const { triggerAlert } = require('../utils/telemetry');
@@ -62,6 +63,12 @@ const requireIdempotency = async (req, res, next) => {
                     userId,
                     path: req.originalUrl
                 });
+    // Also fire the alert for deduplication-aware alerting
+    fireAlert('IDEMPOTENCY_CONFLICT_SPIKE', req.originalUrl || 'UNKNOWN', {
+        idempotencyKey: key,
+        requestId: req.headers['x-request-id'] || 'UNKNOWN',
+        subsystem: 'idempotency'
+    }).catch(() => {});
                 return res.status(409).json({ 
                     success: false, 
                     code: 'IDEMPOTENCY_CONFLICT',

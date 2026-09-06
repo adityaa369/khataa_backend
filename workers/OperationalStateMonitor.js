@@ -1,3 +1,4 @@
+const { fireAlert } = require('../utils/AlertManager');
 const mongoose = require('mongoose');
 const Intent = require('../models/TransactionIntent');
 const NotificationOutbox = require('../models/NotificationOutbox');
@@ -25,13 +26,11 @@ class OperationalStateMonitor {
         });
 
         for (const intent of stuckIntents) {
-            logger.error({
-                type: 'operational_anomaly',
-                anomaly: 'stuck_intent',
+            await fireAlert('STUCK_INTENT', intent._id.toString(), {
                 intentId: intent._id.toString(),
                 loanId: intent.loanId ? intent.loanId.toString() : undefined,
                 createdAt: intent.createdAt,
-                severity: 'MEDIUM'
+                subsystem: 'OperationalStateMonitor'
             });
             results.anomaliesDetected++;
         }
@@ -44,12 +43,11 @@ class OperationalStateMonitor {
         });
 
         for (const event of stuckPendingOutbox) {
-            logger.error({
-                type: 'operational_anomaly',
-                anomaly: 'stuck_outbox_pending',
+            await fireAlert('STUCK_OUTBOX', event.eventId, {
                 eventId: event.eventId,
+                outboxStatus: 'PENDING',
                 createdAt: event.createdAt,
-                severity: 'LOW'
+                subsystem: 'OperationalStateMonitor'
             });
             results.anomaliesDetected++;
         }
@@ -62,13 +60,12 @@ class OperationalStateMonitor {
         });
 
         for (const event of stuckProcessingOutbox) {
-            logger.error({
-                type: 'operational_anomaly',
-                anomaly: 'stuck_outbox_processing',
+            await fireAlert('STUCK_OUTBOX', event.eventId, {
                 eventId: event.eventId,
+                outboxStatus: 'PROCESSING',
                 lockedAt: event.lockedAt,
                 workerId: event.workerId,
-                severity: 'LOW'
+                subsystem: 'OperationalStateMonitor'
             });
             results.anomaliesDetected++;
         }
@@ -80,13 +77,11 @@ class OperationalStateMonitor {
         
         // In a real system we'd track last logged time to avoid spamming, but for this snapshot we log them all
         for (const event of deadLetterOutbox) {
-            logger.error({
-                type: 'operational_anomaly',
-                anomaly: 'outbox_dead_letter',
+            await fireAlert('NOTIFICATION_DEAD_LETTER', event.eventId, {
                 eventId: event.eventId,
                 retryCount: event.retryCount,
                 lastError: event.lastError,
-                severity: 'MEDIUM'
+                subsystem: 'OperationalStateMonitor'
             });
         }
 

@@ -1,3 +1,4 @@
+const { fireAlert } = require('../utils/AlertManager');
 const mongoose = require('mongoose');
 const Loan = require('../models/Loan');
 const Transaction = require('../models/Transaction');
@@ -64,6 +65,12 @@ class InterestAccrualWorker {
                                         }
                                     } catch (err) {
                                         logger.error({ type: 'operational_anomaly', anomaly: 'accrual_failed', message: err.message, severity: 'HIGH' });
+            fireAlert('REPEATED_WORKER_FAILURE', loan._id.toString(), {
+                loanId: loan._id.toString(),
+                jobId: jobId,
+                errorMessage: error.message,
+                subsystem: 'InterestAccrualWorker'
+            }).catch(() => {});
                                         results.failed++;
                                     }
                                     loanResolve();

@@ -1,3 +1,4 @@
+const { fireAlert } = require('../utils/AlertManager');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const NotificationOutbox = require('../models/NotificationOutbox');
