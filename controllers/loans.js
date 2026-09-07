@@ -76,7 +76,7 @@ exports.createLoan = async (req, res) => {
             borrower_name,
             borrower_aadhar,
             borrower_address,
-            amount,
+            amountPaise,
             interest_rate,
             duration_months,
             duration_type,
@@ -86,6 +86,7 @@ exports.createLoan = async (req, res) => {
         } = req.body;
 
         // Sanitize phone: strip 91 or +91
+        const amount = amountPaise ? amountPaise / 100 : 0;
         const borrowerPhone = borrower_phone.toString().replace(/^\+?91/, '');
         const borrowerName = borrower_name;
         const borrowerAadhar = borrower_aadhar;
