@@ -14,18 +14,32 @@ async function performRestore(filepath, targetUri) {
 
     const encrypted = fs.readFileSync(filepath);
     
-    let keyStr = process.env.ENCRYPTION_KEY || 'default_32_byte_secret_key_12345';
+    if (!process.env.BACKUP_ENCRYPTION_KEY) {
+        throw new Error('BACKUP_ENCRYPTION_KEY is required but not set in environment.');
+    }
+    
+    let keyStr = process.env.BACKUP_ENCRYPTION_KEY;
     if (keyStr.length < 32) keyStr = keyStr.padEnd(32, '0');
     const key = Buffer.from(keyStr.slice(0, 32), 'utf8');
     
-    const iv = encrypted.subarray(0, 16);
-    const encryptedData = encrypted.subarray(16);
+    // Extract IV (12 bytes) and AuthTag (16 bytes)
+    const iv = encrypted.subarray(0, 12);
+    const authTag = encrypted.subarray(12, 28);
+    const encryptedData = encrypted.subarray(28);
     
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-    const compressed = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
     
+    let compressed;
+    try {
+        compressed = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+    } catch (err) {
+        throw new Error(`Authentication/Decryption failed: ${err.message}. The backup may be tampered with or the key is incorrect.`);
+    }
+    
+    const { EJSON } = require('bson');
     const rawJson = zlib.gunzipSync(compressed).toString('utf8');
-    const backupData = JSON.parse(rawJson);
+    const backupData = EJSON.parse(rawJson);
 
     await mongoose.connect(targetUri);
     console.log('[Restore] Connected to target MongoDB');
@@ -40,18 +54,8 @@ async function performRestore(filepath, targetUri) {
         await collection.deleteMany({});
         
         if (data.length > 0) {
-            // Need to convert _id strings back to ObjectIds if they were ObjectIds
-            // JSON.stringify serializes ObjectId to string. 
-            // In a real robust restore, we'd use BSON, but for this basic mechanism, 
-            // we will let MongoDB handle it or explicitly cast _ids.
-            const { ObjectId } = require('mongodb');
-            const parsedData = data.map(doc => {
-                if (doc._id && typeof doc._id === 'string' && doc._id.length === 24) {
-                    doc._id = new ObjectId(doc._id);
-                }
-                return doc;
-            });
-            await collection.insertMany(parsedData);
+            // EJSON natively preserves ObjectIds, Dates, and other BSON types!
+            await collection.insertMany(data);
         }
     }
 

@@ -29,20 +29,33 @@ async function performBackup() {
     const filename = `backup-${timestamp}.json.gz.enc`;
     const filepath = path.join(BACKUP_DIR, filename);
 
-    console.log('[Backup] Compressing and encrypting data...');
-    const rawJson = JSON.stringify(backupData);
+    console.log('[Backup] Compressing and encrypting data (AES-256-GCM)...');
+    const { EJSON } = require('bson');
+    const rawJson = EJSON.stringify(backupData);
     const compressed = zlib.gzipSync(rawJson);
 
+    if (!process.env.BACKUP_ENCRYPTION_KEY) {
+        throw new Error('BACKUP_ENCRYPTION_KEY is required but not set in environment.');
+    }
+    
     // Ensure 32-byte key
-    let keyStr = process.env.ENCRYPTION_KEY || 'default_32_byte_secret_key_12345';
+    let keyStr = process.env.BACKUP_ENCRYPTION_KEY;
     if (keyStr.length < 32) keyStr = keyStr.padEnd(32, '0');
     const key = Buffer.from(keyStr.slice(0, 32), 'utf8');
-    const iv = crypto.randomBytes(16);
+    
+    // AES-256-GCM uses a 12-byte IV/nonce
+    const iv = crypto.randomBytes(12);
 
-    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-    const encrypted = Buffer.concat([iv, cipher.update(compressed), cipher.final()]);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const encryptedData = Buffer.concat([cipher.update(compressed), cipher.final()]);
+    
+    // 16-byte authentication tag
+    const authTag = cipher.getAuthTag();
 
-    fs.writeFileSync(filepath, encrypted);
+    // Payload format: [IV (12 bytes)] + [AuthTag (16 bytes)] + [EncryptedData]
+    const finalPayload = Buffer.concat([iv, authTag, encryptedData]);
+
+    fs.writeFileSync(filepath, finalPayload);
     console.log(`[Backup] Backup saved locally to ${filepath}`);
 
     // Upload to Firebase Storage
@@ -53,7 +66,15 @@ async function performBackup() {
         const bucket = getStorage().bucket(bucketName);
         const destination = `backups/${filename}`;
         
-        await bucket.upload(filepath, { destination });
+        // Upload with explicit private ACLs to ensure backup objects are never publicly accessible
+        await bucket.upload(filepath, { 
+            destination, 
+            public: false,
+            metadata: {
+                cacheControl: 'no-cache, no-store, must-revalidate',
+                contentType: 'application/octet-stream'
+            }
+        });
         console.log('[Backup] Upload successful.');
         
         console.log('[Backup] Applying retention policy (30 days)...');
