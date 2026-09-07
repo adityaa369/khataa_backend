@@ -71,7 +71,7 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id', 'x-dev-key'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'x-idempotency-key', 'X-Request-Id', 'x-dev-key'],
 }));
 
 // â”€â”€â”€ Rate Limiting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -192,6 +192,7 @@ const notificationRoutes = require('./routes/notifications');
 const intentRoutes = require('./routes/intents');
 const chitFundRoutes = require('./routes/chitFunds');
 const operationalRoutes = require('./routes/operational');
+const documentRoutes = require('./routes/documents');
 
 
 
@@ -204,6 +205,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/intents', intentRoutes);
 app.use('/api/chitfunds', chitFundRoutes);
 app.use('/api/operational', operationalRoutes);
+app.use('/api/documents', documentRoutes);
 
 // ————————————————————————————————————————————————————————————————————————————————
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));

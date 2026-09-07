@@ -84,10 +84,10 @@ async function runTests() {
             status: 'pending_approval'
         });
 
-        let res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).send({});
+        let res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).set('x-idempotency-key', 'b1-verify-1-' + Date.now()).send({});
         assertThrows(res.status === 400 && res.body.message.includes('OTP and intentId are required'), 'Rejects missing OTP/intent');
 
-        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).send({ otp: 'INVALID', intentId: 'dummy' });
+        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).set('x-idempotency-key', 'b1-verify-2-' + Date.now()).send({ otp: 'INVALID', intentId: 'dummy' });
         assertThrows(res.status === 400 && res.body.message.includes('Invalid OTP'), 'Rejects invalid OTP');
 
         const loansController = require('./controllers/loans');
@@ -97,7 +97,7 @@ async function runTests() {
             return { success: false, error: 'invalid token' };
         };
 
-        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).send({ otp: 'VALID_OTP_U', intentId: 'dummy' });
+        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).set('x-idempotency-key', 'b1-verify-3-' + Date.now()).send({ otp: 'VALID_OTP_U', intentId: 'dummy' });
         assertThrows(res.status === 400 && res.body.message.includes('OTP phone mismatch'), 'Rejects OTP if phone mismatch');
 
         let intent = await TransactionIntent.create({
@@ -105,27 +105,27 @@ async function runTests() {
         });
         
         await TransactionIntent.updateOne({ _id: intent._id }, { status: 'CONSUMED' });
-        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).send({ otp: 'VALID_OTP_B', intentId: intent.intentId });
+        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).set('x-idempotency-key', 'b1-verify-4-' + Date.now()).send({ otp: 'VALID_OTP_B', intentId: intent.intentId });
         assertThrows(res.status !== 200, 'Rejects consumed intent');
         
         await TransactionIntent.updateOne({ _id: intent._id }, { status: 'PENDING' });
 
-        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).send({ otp: 'VALID_OTP_B', intentId: intent.intentId });
+        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).set('x-idempotency-key', 'b1-verify-5-' + Date.now()).send({ otp: 'VALID_OTP_B', intentId: intent.intentId });
         assertThrows(res.status === 200, 'Successful loan acceptance with valid OTP and Intent');
         
-        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).send({ otp: 'VALID_OTP_B', intentId: intent.intentId });
+        res = await request(app).post('/api/loans/' + loan._id + '/verify').set('Authorization', 'Bearer ' + borrowerToken).set('x-idempotency-key', 'b1-verify-6-' + Date.now()).send({ otp: 'VALID_OTP_B', intentId: intent.intentId });
         assertThrows(res.status !== 200, 'Rejects replay of same intent');
 
         console.log('\n--- 4H-B1: Testing addCredit Security Rules ---');
         
-        res = await request(app).post('/api/loans/' + loan._id + '/add-credit').set('Authorization', 'Bearer ' + lenderToken).send({ amountPaise: 50000 });
+        res = await request(app).post('/api/loans/' + loan._id + '/add-credit').set('Authorization', 'Bearer ' + lenderToken).set('x-idempotency-key', 'b1-addcredit-1-' + Date.now()).send({ amountPaise: 50000 });
         assertThrows(res.status === 400 && res.body.message.includes('Intent ID and OTP required'), 'addCredit rejects missing OTP/intent');
 
         let creditIntent = await TransactionIntent.create({
             loanId: loan._id, userId: 'L', action: 'ADD_CREDIT', payload: { amountPaise: 50000 }, expiresAt: new Date(Date.now() + 100000)
         });
 
-        res = await request(app).post('/api/loans/' + loan._id + '/add-credit').set('Authorization', 'Bearer ' + lenderToken).send({ amountPaise: 50000, idToken: 'VALID_OTP_B', intentId: creditIntent.intentId });
+        res = await request(app).post('/api/loans/' + loan._id + '/add-credit').set('Authorization', 'Bearer ' + lenderToken).set('x-idempotency-key', 'b1-addcredit-2-' + Date.now()).send({ amountPaise: 50000, idToken: 'VALID_OTP_B', intentId: creditIntent.intentId });
         if (res.status !== 200) console.log('addCredit failure body:', JSON.stringify(res.body));
         assertThrows(res.status === 200, 'Successful addCredit with valid OTP and Intent');
 
