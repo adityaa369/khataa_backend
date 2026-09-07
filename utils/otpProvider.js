@@ -7,11 +7,6 @@ const admin = require('../config/firebase');
  */
 const verifyFirebaseToken = async (idToken) => {
     try {
-        if (!admin.apps.length) {
-            console.error('[Firebase] Admin SDK is not initialized. Cannot verify token.');
-            return { success: false, message: 'Server configuration error' };
-        }
-
         const decodedToken = await admin.auth().verifyIdToken(idToken);
 
         // decodedToken contains the user's phone_number if they signed in via Phone Auth

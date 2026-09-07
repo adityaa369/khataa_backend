@@ -186,7 +186,7 @@ exports.createLoan = async (req, res) => {
         });
 
         await invalidateLoanCache(loan.lender, loan.borrower);
-        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+        await cacheInvalidate(`loans:given:v2:${loan.lender}`, `loans:taken:v2:${loan.borrower}`);
 
         const lenderName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'A lender';
 
@@ -227,7 +227,7 @@ exports.createLoan = async (req, res) => {
 // @access  Private
 exports.getGivenLoans = async (req, res) => {
     try {
-        const cacheKey = `loans:given:${req.user.id}`;
+        const cacheKey = `loans:given:v2:${req.user.id}`;
         const cached = await cacheGet(cacheKey);
         if (cached) return res.status(200).json(cached);
 
@@ -254,12 +254,12 @@ exports.getGivenLoans = async (req, res) => {
         // --- CHIT FUNDS AGGREGATION ---
         const ChitFund = require('../models/ChitFund');
         const ownedChits = await ChitFund.find({ owner: req.user.id });
-
         for (const chit of ownedChits) {
             loansMapped.push({
                 _id: chit._id,
                 loanType: 'chitfund',
-                amount: chit.totalValue, amountPaise: Math.round(chit.totalValue * 100),
+                amount: chit.totalValue, 
+                amountPaise: require('../utils/money').parseRupeesToPaise(chit.totalValue.toString()),
                 interestRate: 0,
                 durationMonths: chit.totalMonths,
                 status: chit.status === 'completed' ? 'completed' : 'active',
@@ -269,7 +269,11 @@ exports.getGivenLoans = async (req, res) => {
                 lenderName: `${req.user.firstName || ''} ${req.user.lastName || ''}`,
                 borrowerName: `${chit.currentSubscribersCount} Member(s)`,
                 borrowerPhone: 'N/A',
-                emiAmount: chit.monthlySubscription, emiAmountPaise: Math.round(chit.monthlySubscription * 100),
+                emiAmount: chit.monthlySubscription, 
+                emiAmountPaise: require('../utils/money').parseRupeesToPaise(chit.monthlySubscription.toString()),
+                principalOutstandingPaise: require('../utils/money').parseRupeesToPaise(chit.totalValue.toString()),
+                interestOutstandingPaise: 0,
+                feesOutstandingPaise: 0,
                 createdAt: chit.createdAt
             });
         }
@@ -292,7 +296,7 @@ exports.getGivenLoans = async (req, res) => {
 // @access  Private
 exports.getTakenLoans = async (req, res) => {
     try {
-        const cacheKey = `loans:taken:${req.user.id}`;
+        const cacheKey = `loans:taken:v2:${req.user.id}`;
         const cached = await cacheGet(cacheKey);
         if (cached) return res.status(200).json(cached);
 
@@ -466,7 +470,7 @@ exports.updateProgress = async (req, res) => {
         }
         await loan.save();
         await invalidateLoanCache(loan.lender, loan.borrower);
-        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+        await cacheInvalidate(`loans:given:v2:${loan.lender}`, `loans:taken:v2:${loan.borrower}`);
 
         // Update Credit Score of borrower
         if (loan.borrower) {
@@ -540,7 +544,7 @@ exports.verifyLenderOtp = async (req, res) => {
         loan.isOtpVerified = true;
         await loan.save();
         await invalidateLoanCache(loan.lender, loan.borrower);
-        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+        await cacheInvalidate(`loans:given:v2:${loan.lender}`, `loans:taken:v2:${loan.borrower}`);
 
         // Now trigger the Push Notification to the borrower
         const borrowerUser = await User.findOne({ id: loan.borrower });
@@ -644,7 +648,7 @@ exports.closeLoan = async (req, res) => {
             console.error('[Loans] closure email failed:', emailErr.message);
         }
         await invalidateLoanCache(loan.lender, loan.borrower);
-        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+        await cacheInvalidate(`loans:given:v2:${loan.lender}`, `loans:taken:v2:${loan.borrower}`);
 
         const NotificationOutbox = require('../models/NotificationOutbox');
         
@@ -857,7 +861,7 @@ exports.toggleMonthStatus = async (req, res) => {
         }
         
         await loan.save();
-        await require('../config/redis').cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+        await require('../config/redis').cacheInvalidate(`loans:given:v2:${loan.lender}`, `loans:taken:v2:${loan.borrower}`);
         
         res.status(200).json({ success: true, loan: serializeLoan(loan) });
     } catch (err) {

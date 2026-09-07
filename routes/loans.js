@@ -49,7 +49,7 @@ router.post('/:id/payment-nudge', protect, apiLimiter, requireIdempotency, sendP
 router.post('/:id/record-payment', financialLimiter, requireIdempotency, validatePaymentAmount, recordPayment);
 router.post('/:id/add-credit', financialLimiter, requireIdempotency, validatePaymentAmount, addCredit);
 router.patch('/:id/months/:monthIndex', protect, toggleMonthStatus);
-router.post('/upload-document', uploadDocument);
+router.post('/upload-document', protect, uploadDocument);
 router.post('/:id/cancel', financialLimiter, requireIdempotency, cancelLoan);
 router.delete('/:id', cancelLoan);
 
