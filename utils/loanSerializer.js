@@ -3,8 +3,8 @@ const normalizeLoanRecord = (loanObj) => {
     if (loanObj.amountPaise != null && Number.isInteger(loanObj.amountPaise)) {
         // V2 record -> unchanged
     } else if (loanObj.amount != null) {
-        // Legacy record -> compute amountPaise
-        loanObj.amountPaise = Math.round(loanObj.amount * 100);
+        // Legacy record -> compute amountPaise using safe string parser
+        loanObj.amountPaise = require('../utils/money').parseRupeesToPaise(loanObj.amount.toString());
     } else {
         throw new Error(`Invalid loan record ${loanObj._id}: Missing both amount and amountPaise`);
     }
@@ -12,10 +12,10 @@ const normalizeLoanRecord = (loanObj) => {
     // Do the same for paidAmountPaise vs paidAmount if necessary, 
     // but the error specifically was amountPaise. Let's be thorough:
     if (loanObj.paidAmountPaise == null && loanObj.paidAmount != null) {
-        loanObj.paidAmountPaise = Math.round(loanObj.paidAmount * 100);
+        loanObj.paidAmountPaise = require('../utils/money').parseRupeesToPaise(loanObj.paidAmount.toString());
     }
     if (loanObj.totalPayablePaise == null && loanObj.totalPayable != null) {
-        loanObj.totalPayablePaise = Math.round(loanObj.totalPayable * 100);
+        loanObj.totalPayablePaise = require('../utils/money').parseRupeesToPaise(loanObj.totalPayable.toString());
     }
     
     return loanObj;

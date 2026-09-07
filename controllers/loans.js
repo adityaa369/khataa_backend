@@ -210,8 +210,7 @@ exports.createLoan = async (req, res) => {
             });
         }
 
-        const loanResponse = loan.toObject();
-
+        
         res.status(201).json({
             success: true,
             message: 'Loan agreement initiated. OTP sent to borrower.',

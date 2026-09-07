@@ -33,15 +33,15 @@ const validateRegister = [
 const validateCreateLoan = [
     body('amountPaise').notEmpty().not().isArray().withMessage('Amount cannot be an array').withMessage('amountPaise is required').isInt({ min: 10000, max: 100000000000 }).withMessage('amountPaise must be a positive integer in paise (min Rs 100)'),
     body('borrower_phone').notEmpty().withMessage('Borrower phone is required').matches(/^(\+91)?[6-9]\d{9}$/).withMessage('Enter a valid Indian phone number'),
-    body('interest_rate').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0, max: 100 }).withMessage('Interest rate must be between 0 and 100'),
+    body('interest_rate').optional({ nullable: true }).isFloat({ min: 0, max: 100 }).withMessage('Interest rate must be between 0 and 100'),
     body('duration_months').notEmpty().not().isArray().withMessage('Duration is required').isInt({ min: 1, max: 120 }).withMessage('Duration must be between 1 and 120'),
     body('borrower_name').notEmpty().withMessage('Borrower name is required').trim().isLength({ max: 100 }).withMessage('Name too long'),
-    body('borrower_aadhar').optional({ nullable: true, checkFalsy: true }).isString(),
-    body('borrower_address').optional({ nullable: true, checkFalsy: true }).isString(),
-    body('duration_type').optional({ nullable: true, checkFalsy: true }).isString(),
-    body('type').optional({ nullable: true, checkFalsy: true }).isString(),
-    body('transaction_id').optional({ nullable: true, checkFalsy: true }).isString().withMessage('transaction_id must be a string'),
-    body('documentId').optional({ nullable: true, checkFalsy: true }).isString(),
+    body('borrower_aadhar').optional({ nullable: true }).isString(),
+    body('borrower_address').optional({ nullable: true }).isString(),
+    body('duration_type').optional({ nullable: true }).isString(),
+    body('type').optional({ nullable: true }).isString(),
+    body('transaction_id').optional({ nullable: true }).isString().withMessage('transaction_id must be a string'),
+    body('documentId').optional({ nullable: true }).isString(),
     handleValidationErrors
 ];
 
