@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Loan = require('../models/Loan');
+const Transaction = require('../models/Transaction');
 const LedgerEntry = require('../models/LedgerEntry');
 const ChitFund = require('../models/ChitFund');
 const ChitLedger = require('../models/ChitLedger');
@@ -63,9 +64,9 @@ class ReconciliationService {
         
         for (const loan of loans) {
             // LOAN-001: Integer checks
-            if (!Number.isInteger(loan.amountPaise) || loan.amountPaise < 0 ||
-                !Number.isInteger(loan.paidAmountPaise) || loan.paidAmountPaise < 0 ||
-                !Number.isInteger(loan.totalPayablePaise) || loan.totalPayablePaise < 0) {
+            if (!Number.isInteger(loan.principalOutstandingPaise || 0) || (loan.principalOutstandingPaise || 0) < 0 ||
+                !Number.isInteger(loan.interestOutstandingPaise || 0) || (loan.interestOutstandingPaise || 0) < 0 ||
+                !Number.isInteger(loan.feesOutstandingPaise || 0) || (loan.feesOutstandingPaise || 0) < 0) {
                 await this.reportIncident('LOAN-001', 'Loan', loan._id, 'Integers >= 0', 'Invalid Math', 'Found float or negative');
             }
 
@@ -74,22 +75,31 @@ class ReconciliationService {
                 await this.reportIncident('LOAN-002', 'Loan', loan._id, loan.totalPayablePaise, loan.paidAmountPaise, 'Overpayment detected');
             }
 
-            // LOAN-003: Ledger Consistency
-            // Independent calculation: Sum of all credits against this loan in LedgerEntry
-            const ledgerSum = await LedgerEntry.aggregate([
-                { $match: { referenceModel: 'Loan', referenceId: loan._id, type: 'CREDIT' } },
-                { $group: { _id: null, totalPaid: { $sum: "$amountPaise" } } }
-            ]);
-            const independentPaidPaise = ledgerSum.length > 0 ? ledgerSum[0].totalPaid : 0;
-            
-            // Note: Since legacy payments might not have LedgerEntries yet, we only assert this strictly if 
-            // the loan was created recently or fully migrated. For simulation, we enforce strict parity.
-            if (false) {
-                // If the app has raw transactions but ledger sum is 0, it means it's pre-ledger legacy data.
-                // In a real system, we'd only alert if it's a new loan. We will log it for the test.
-                if (independentPaidPaise !== 0 || loan.createdAt > new Date('2025-01-01')) {
-                    await this.reportIncident('LOAN-003', 'Loan', loan._id, independentPaidPaise, loan.paidAmountPaise, 'Ledger mismatch');
+            // LOAN-003: V2 Ledger Consistency
+            const [agg] = await Transaction.aggregate([
+                { $match: { loanId: loan._id } },
+                { 
+                    $group: { 
+                        _id: null, 
+                        totalP: { $sum: "$principalDeltaPaise" }, 
+                        totalI: { $sum: "$interestDeltaPaise" }, 
+                        totalF: { $sum: "$feeDeltaPaise" } 
+                    } 
                 }
+            ]);
+
+            const ledgerP = agg ? agg.totalP : 0;
+            const ledgerI = agg ? agg.totalI : 0;
+            const ledgerF = agg ? agg.totalF : 0;
+
+            const isMatch = (
+                ledgerP === (loan.principalOutstandingPaise || 0) &&
+                ledgerI === (loan.interestOutstandingPaise || 0) &&
+                ledgerF === (loan.feesOutstandingPaise || 0)
+            );
+
+            if (!isMatch && loan.status !== 'closed' && loan.status !== 'written_off') {
+                await this.reportIncident('LOAN-003', 'Loan', loan._id, 'V2 Parity', `P:${ledgerP} I:${ledgerI}`, 'Ledger mismatch');
             }
         }
     }

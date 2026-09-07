@@ -8,7 +8,7 @@ const NotificationWorker = require('./workers/NotificationWorker');
 const ReconciliationEngine = require('./workers/ReconciliationEngine');
 const OperationalStateMonitor = require('./workers/OperationalStateMonitor');
 
-let isRunning = { interest: false, notification: false, reconciliation: false, monitor: false };
+let isRunning = { interest: false, notification: false, reconciliation: false, monitor: false, backup: false };
 const intervals = [];
 
 async function connectDB() {
@@ -81,6 +81,20 @@ async function runMonitorSafe() {
     }
 }
 
+async function runBackupSafe() {
+    if (isRunning.backup) return;
+    isRunning.backup = true;
+    try {
+        const performBackup = require('./scripts/backup');
+        await performBackup();
+    } catch (e) {
+        logger.error(`[Scheduler] DatabaseBackup failed: ${e.message}`);
+        fireAlert('WORKER_FAILED', 'CRITICAL', 'DatabaseBackup', { error: e.message, subsystem: 'scheduler' });
+    } finally {
+        isRunning.backup = false;
+    }
+}
+
 async function start() {
     logger.info('[Scheduler] Starting Khataa Production Scheduler (Singleton)');
     await connectDB();
@@ -93,6 +107,8 @@ async function start() {
     intervals.push(setInterval(runReconciliationSafe, 60 * 60 * 1000));
     // Operational Monitor: 5 minutes
     intervals.push(setInterval(runMonitorSafe, 5 * 60 * 1000));
+    // Database Backup: Daily check (run every 24 hours)
+    intervals.push(setInterval(runBackupSafe, 24 * 60 * 60 * 1000));
 
     logger.info('[Scheduler] All schedules registered. Running initial ticks...');
     await runInterestAccrualSafe();
