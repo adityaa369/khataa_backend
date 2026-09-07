@@ -1,8 +1,11 @@
 const Notification = require('../models/Notification');
+const admin = require('firebase-admin');
+const path = require('path');
+const fs = require('fs');
 const Loan = require('../models/Loan');
+const { serializeLoan } = require('../utils/loanSerializer');
 const User = require('../models/User');
 const { sendOtp } = require('../utils/otpProvider');
-
 const { updateCreditScore } = require('../utils/creditScoreCalc');
 const { sendEmail } = require('../utils/email');
 const { loanGivenTemplate, paymentRecordedTemplate, loanClosedTemplate } = require('../utils/emailTemplates');
@@ -13,14 +16,7 @@ const { metrics } = require('../middleware/metrics');
 const { withTransaction } = require('../utils/dbTransaction');
 const { cacheGet, cacheSet, cacheInvalidate } = require('../config/redis');
 
-const normalizeLoan = (loan) => {
-    let obj = loan;
-    if (loan && typeof loan.toObject === 'function') obj = loan.toObject();
-    if (obj && obj.amountPaise === undefined && obj.amount !== undefined) {
-        obj.amountPaise = require('../utils/money').parseRupeesToPaise(obj.amount);
-    }
-    return obj;
-};
+
 
 function sendError(res, err, status = 500) {
     const isProd = process.env.NODE_ENV === 'production';
@@ -110,7 +106,7 @@ exports.createLoan = async (req, res) => {
                 return res.status(200).json({
                     success: true,
                     message: 'Loan already created',
-                    loan: existingLoan.toObject()
+                    loan: serializeLoan(existingLoan)
                 });
             }
         }
@@ -219,7 +215,7 @@ exports.createLoan = async (req, res) => {
         res.status(201).json({
             success: true,
             message: 'Loan agreement initiated. OTP sent to borrower.',
-            loan: loanResponse
+            loan: serializeLoan(loan)
         });
     } catch (err) {
         console.error('[Loans] createLoan Error:', err.message);
@@ -240,7 +236,7 @@ exports.getGivenLoans = async (req, res) => {
         const loansMapped = [];
         const User = require('../models/User'); // Import User model
         for (const loan of loans) {
-            const loanObj = loan.toObject ? loan.toObject() : loan;
+            const loanObj = serializeLoan(loan);
             
             // Dynamically fetch borrower name if registered
             if (loanObj.borrower) {
@@ -264,7 +260,7 @@ exports.getGivenLoans = async (req, res) => {
             loansMapped.push({
                 _id: chit._id,
                 loanType: 'chitfund',
-                amount: chit.totalValue,
+                amount: chit.totalValue, amountPaise: Math.round(chit.totalValue * 100),
                 interestRate: 0,
                 durationMonths: chit.totalMonths,
                 status: chit.status === 'completed' ? 'completed' : 'active',
@@ -274,7 +270,7 @@ exports.getGivenLoans = async (req, res) => {
                 lenderName: `${req.user.firstName || ''} ${req.user.lastName || ''}`,
                 borrowerName: `${chit.currentSubscribersCount} Member(s)`,
                 borrowerPhone: 'N/A',
-                emiAmount: chit.monthlySubscription,
+                emiAmount: chit.monthlySubscription, emiAmountPaise: Math.round(chit.monthlySubscription * 100),
                 createdAt: chit.createdAt
             });
         }
@@ -315,7 +311,7 @@ exports.getTakenLoans = async (req, res) => {
         const loansWithLender = [];
         for (const loan of loans) {
             const lenderUser = await User.findOne({ id: loan.lender });
-            const loanObj = loan.toObject ? loan.toObject() : loan;
+            const loanObj = serializeLoan(loan);
             if (lenderUser) {
                 loanObj.lenderName = `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() || 'Unknown Lender';
                 loanObj.lenderPhone = lenderUser.phone || '';
@@ -497,7 +493,7 @@ exports.updateProgress = async (req, res) => {
             }
         }
 
-        res.status(200).json({ success: true, loan });
+        res.status(200).json({ success: true, loan: serializeLoan(loan) });
     } catch (err) {
         sendError(res, err);
     }
@@ -685,7 +681,7 @@ exports.closeLoan = async (req, res) => {
         }
 
         const legacyTxs = await fetchV2TransactionsAsLegacy(loan._id);
-        res.status(200).json({ success: true, message: 'Loan successfully closed.', loan: normalizeLoan(refreshedLoan || loan), transactions: legacyTxs });
+        res.status(200).json({ success: true, message: 'Loan successfully closed.', loan: serializeLoan(refreshedLoan || loan), transactions: legacyTxs });
     } catch (err) {
         console.error('[Loans] closeLoan Error:', err.message);
         sendError(res, err);
@@ -792,7 +788,7 @@ exports.recordPayment = async (req, res) => {
         
         // Return matching response format for backward compatibility
         const legacyTxs = await fetchV2TransactionsAsLegacy(result.loan._id);
-        res.status(200).json({ success: true, loan: normalizeLoan(result.loan), transactions: legacyTxs });
+        res.status(200).json({ success: true, loan: serializeLoan(result.loan), transactions: legacyTxs });
     } catch (err) {
         if (err.message.includes('OVERPAYMENT_REJECTED')) {
             return res.status(400).json({ success: false, message: 'Cannot pay more than outstanding balance' });
@@ -820,7 +816,7 @@ exports.addCredit = async (req, res) => {
         const result = await FinancialLedgerService.addCredit(loanId, amountPaise, req.user.id, intentId);
         
         const legacyTxs = await fetchV2TransactionsAsLegacy(result.loan._id);
-        res.status(200).json({ success: true, loan: normalizeLoan(result.loan), transactions: legacyTxs });
+        res.status(200).json({ success: true, loan: serializeLoan(result.loan), transactions: legacyTxs });
     } catch (err) {
         console.error('[Loans] addCredit Error:', err.message);
         res.status(500).json({ success: false, message: err.message });
@@ -864,7 +860,7 @@ exports.toggleMonthStatus = async (req, res) => {
         await loan.save();
         await require('../config/redis').cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
         
-        res.status(200).json({ success: true, loan });
+        res.status(200).json({ success: true, loan: serializeLoan(loan) });
     } catch (err) {
         console.error('[Loans] toggleMonthStatus Error:', err);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -1236,7 +1232,7 @@ exports.getLoanById = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Loan not found' });
         }
         
-        const loanObj = loan.toObject ? loan.toObject() : loan;
+        const loanObj = serializeLoan(loan);
         const User = require('../models/User');
         
         if (loanObj.borrower) {
@@ -1261,7 +1257,7 @@ exports.getLoanById = async (req, res) => {
         }
         
         const legacyTxs = await fetchV2TransactionsAsLegacy(loanObj._id);
-        res.status(200).json({ success: true, loan: normalizeLoan(loanObj), transactions: legacyTxs });
+        res.status(200).json({ success: true, loan: serializeLoan(loanObj), transactions: legacyTxs });
     } catch (err) {
         console.error('[Loans] getLoanById Error:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });
