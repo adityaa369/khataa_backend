@@ -14,7 +14,8 @@ exports.getDocumentUrl = async (req, res, next) => {
         }
 
         const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
-        const bucket = admin.storage().bucket(bucketName);
+        const { getStorage } = require('firebase-admin/storage');
+        const bucket = getStorage().bucket(bucketName);
         const file = bucket.file(documentId);
 
 

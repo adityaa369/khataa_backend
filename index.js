@@ -149,8 +149,20 @@ app.use((req, res, next) => {
 
 // â”€â”€â”€ Body Parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use(compression());
-app.use(bodyParser.json({ limit: '10mb' }));
-app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
+app.use((req, res, next) => {
+    if (req.path === '/api/loans/upload-document') {
+        bodyParser.json({ limit: '10mb' })(req, res, next);
+    } else {
+        bodyParser.json({ limit: '100kb' })(req, res, next);
+    }
+});
+app.use((req, res, next) => {
+    if (req.path === '/api/loans/upload-document') {
+        bodyParser.urlencoded({ limit: '10mb', extended: true })(req, res, next);
+    } else {
+        bodyParser.urlencoded({ limit: '100kb', extended: true })(req, res, next);
+    }
+});
 
 // â”€â”€â”€ NoSQL Injection & Parameter Pollution Protection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use(mongoSanitize()); // strips $, . from request body/params/query

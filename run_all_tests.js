@@ -10,7 +10,9 @@ const tests = [
     'test_4h_c.js',
     'test_4h_c_contract.js',
     'test_optional_document.js',
-    'test_document_auth.js'
+    'test_document_auth.js',
+    'test_cache_contract.js',
+    'test_otp_contract.js'
 ];
 
 let totalPassed = 0;

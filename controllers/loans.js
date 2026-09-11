@@ -34,8 +34,8 @@ module.exports._verifyFirebaseIdToken = async function(idToken) {
 async function verifyFirebaseIdToken(idToken) {
     if (!idToken) return { success: false, message: 'Missing idToken' };
     try {
-        const admin = require('firebase-admin');
-        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        const { getAuth } = require('firebase-admin/auth');
+        const decodedToken = await getAuth().verifyIdToken(idToken);
         if (!decodedToken.phone_number) return { success: false, message: 'No phone number in token' };
         return { success: true, phone: decodedToken.phone_number };
     } catch (err) {
@@ -739,7 +739,8 @@ exports.uploadDocument = async (req, res) => {
         const buffer = Buffer.from(base64Data, 'base64');
         try {
             const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
-            const bucket = admin.storage().bucket(bucketName);
+            const { getStorage } = require('firebase-admin/storage');
+            const bucket = getStorage().bucket(bucketName);
             // Opaque UUID storage key — original filename never exposed
             const { v4: uuidv4 } = require('uuid');
             const storageKey = `documents/${uuidv4()}${require('path').extname(sanitizedName).toLowerCase()}`;

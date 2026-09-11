@@ -1,4 +1,4 @@
-const admin = require('firebase-admin');
+const { getMessaging } = require('firebase-admin/messaging');
 
 /**
  * Send an FCM Push Notification
@@ -20,7 +20,7 @@ exports.sendPushNotification = async (token, title, body, data = {}) => {
             token
         };
 
-        const response = await admin.messaging().send(message);
+        const response = await getMessaging().send(message);
         console.log(`[FCM] Successfully sent message:`, response);
         return { success: true, response };
     } catch (error) {

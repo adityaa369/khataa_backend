@@ -15,7 +15,8 @@ async function generateAndUploadClosureCertificate(loan) {
                 try {
                     const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khatha-firebase.appspot.com'; 
                     // To handle default or custom buckets
-                    const bucket = admin.storage().bucket(bucketName);
+                    const { getStorage } = require('firebase-admin/storage');
+            const bucket = getStorage().bucket(bucketName);
                     
                     const filename = `certificates/closure_${loan._id}_${uuidv4()}.pdf`;
                     const file = bucket.file(filename);

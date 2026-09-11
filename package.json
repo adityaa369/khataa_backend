@@ -42,5 +42,8 @@
     "nock": "^14.0.17",
     "nodemon": "^3.1.11",
     "supertest": "^7.2.2"
+  },
+  "engines": {
+    "node": ">=22.x"
   }
 }

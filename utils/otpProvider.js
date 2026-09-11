@@ -1,15 +1,19 @@
-const admin = require('../config/firebase');
+require('../config/firebase'); // Ensure initialization runs
+const { getAuth } = require('firebase-admin/auth');
+const { getApps } = require('firebase-admin/app');
 
 /**
  * Verify Firebase ID Token
- * When the Flutter app successfully completes Phone Auth, it receives an ID Token.
- * It sends that token to our backend, and we verify it here using the Admin SDK.
  */
 const verifyFirebaseToken = async (idToken) => {
     try {
-        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        if (getApps().length === 0) {
+            console.error('[Firebase] Admin SDK is not initialized. Cannot verify token.');
+            return { success: false, message: 'Server configuration error' };
+        }
 
-        // decodedToken contains the user's phone_number if they signed in via Phone Auth
+        const decodedToken = await getAuth().verifyIdToken(idToken);
+
         const phone = decodedToken.phone_number;
 
         if (!phone) {
@@ -27,11 +31,6 @@ const verifyFirebaseToken = async (idToken) => {
     }
 };
 
-/**
- * Mock sendOtp fallback
- * Firebase Phone Auth cannot be triggered from the backend to send custom SMS.
- * This mock is kept for local testing purposes to print the OTP.
- */
 const sendOtp = async (phone, otp) => {
     if (process.env.NODE_ENV !== 'production') {
         console.log(`\n=========================================`);
