@@ -3,20 +3,24 @@ const Redis = require('ioredis');
 // Ensure Redis connection doesn't crash the app if unavailable
 let redisClient;
 try {
-    redisClient = new Redis(process.env.REDIS_URI || 'redis://127.0.0.1:6379', {
-        maxRetriesPerRequest: 1,
-        retryStrategy(times) {
-            if (times > 3) {
-                console.warn('[Redis] Connection failed, disabling cache.');
-                return null;
-            }
-            return Math.min(times * 50, 2000);
-        }
-    });
-    
-    redisClient.on('error', (err) => {
-        console.error('[Redis Cache] Error:', err.message);
-    });
+    const redisUrl = process.env.REDIS_URI || process.env.REDIS_URL;
+    if (redisUrl) {
+        redisClient = new Redis(redisUrl, {
+            maxRetriesPerRequest: 0,
+            retryStrategy: () => null,       // never retry
+            reconnectOnError: () => false,   // never reconnect
+            lazyConnect: true,
+        });
+
+        // MUST attach error handler to suppress unhandled error events
+        redisClient.on('error', () => { /* silently disable */ });
+
+        redisClient.connect().catch(() => {
+            console.warn('[Redis] Unavailable — caching disabled.');
+        });
+    } else {
+        console.log('[Redis] REDIS_URI/REDIS_URL not set — caching disabled.');
+    }
 } catch (e) {
     console.error('[Redis Cache] Failed to initialize:', e.message);
 }
