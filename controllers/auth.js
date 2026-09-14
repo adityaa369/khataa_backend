@@ -1,4 +1,4 @@
-﻿const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const CreditScore = require('../models/CreditScore');
@@ -105,7 +105,10 @@ exports.verifyOtp = async (req, res) => {
             user
         });
     } catch (err) {
-        console.error('[Auth] verifyOtp Error:', err.message);
+        console.error('[Auth] verifyOtp Error:');
+        console.error(`Name: ${err.name}`);
+        console.error(`Message: ${err.message}`);
+        console.error(`Stack: ${err.stack}`);
         res.status(500).json({
             success: false,
             message: err.message
@@ -557,7 +560,10 @@ exports.verifyOtpMsg91 = async (req, res) => {
             user
         });
     } catch (err) {
-        console.error('[Auth] verifyOtpMsg91 Error:', err.message);
+        console.error('[Auth] verifyOtpMsg91 Error:');
+        console.error(`Name: ${err.name}`);
+        console.error(`Message: ${err.message}`);
+        console.error(`Stack: ${err.stack}`);
         res.status(500).json({
             success: false,
             message: err.message

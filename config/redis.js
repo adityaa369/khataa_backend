@@ -54,11 +54,17 @@ function getRedisClient() {
     return redisClient;
 }
 
-// Wrapper helpers — gracefully degrade if Redis is down
+// In-memory fallback
+const memCache = new Map();
+
 async function cacheGet(key) {
     try {
         const client = getRedisClient();
-        if (!client || !redisAvailable) return null;
+        if (!client || !redisAvailable) {
+            const val = memCache.get(key);
+            if (val && val.expires > Date.now()) return val.data;
+            return null;
+        }
         const val = await client.get(key);
         return val ? JSON.parse(val) : null;
     } catch {
@@ -69,17 +75,23 @@ async function cacheGet(key) {
 async function cacheSet(key, value, ttlSeconds = 120) {
     try {
         const client = getRedisClient();
-        if (!client || !redisAvailable) return;
+        if (!client || !redisAvailable) {
+            memCache.set(key, { data: value, expires: Date.now() + (ttlSeconds * 1000) });
+            return;
+        }
         await client.setex(key, ttlSeconds, JSON.stringify(value));
     } catch {
-        // silent — caching failure should never break the app
+        // silent
     }
 }
 
 async function cacheInvalidate(...keys) {
     try {
         const client = getRedisClient();
-        if (!client || !redisAvailable) return;
+        if (!client || !redisAvailable) {
+            keys.forEach(k => memCache.delete(k));
+            return;
+        }
         if (keys.length > 0) await client.del(...keys);
     } catch {
         // silent
@@ -89,7 +101,14 @@ async function cacheInvalidate(...keys) {
 async function cacheInvalidatePattern(pattern) {
     try {
         const client = getRedisClient();
-        if (!client || !redisAvailable) return;
+        if (!client || !redisAvailable) {
+            // Very naive pattern match for memory fallback
+            const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+            for (const k of memCache.keys()) {
+                if (regex.test(k)) memCache.delete(k);
+            }
+            return;
+        }
         const keys = await client.keys(pattern);
         if (keys.length > 0) await client.del(...keys);
     } catch {

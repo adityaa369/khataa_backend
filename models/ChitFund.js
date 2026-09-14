@@ -56,7 +56,33 @@ const ChitFundSchema = new mongoose.Schema({
     commissionPercentage: {
         type: Number,
         default: 5 // 5% commission on winning bid
-    }
+    },
+    isPublic: { type: Boolean, default: true },
+    members: [{
+        user: { type: String, ref: 'User' },
+        hasWon: { type: Boolean, default: false }
+    }],
+    auctions: [{
+        monthNumber: Number,
+        status: String,
+        openedAt: Date,
+        closedAt: Date,
+        winnerId: String,
+        winnerBid: Number,
+        bids: [{
+            userId: String,
+            amount: Number,
+            placedAt: Date
+        }]
+    }],
+    currentMonth: { type: Number, default: 1 },
+    monthlyContribution: { type: Number, default: 0 },
+    winnerHistory: [{
+        month: Number,
+        userId: String,
+        amount: Number,
+        date: Date
+    }]
 
 }, {
     timestamps: true

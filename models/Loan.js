@@ -76,27 +76,49 @@ const LoanSchema = new mongoose.Schema({
         type: String,
         required: false
     },
+    documentId: {
+        type: String,
+        required: false
+    },
     paidAmount: {
         type: Number,
         default: 0
     },
+    // --- V2 Materialized Fields ---
+    amountPaise: Number,
+    emiAmountPaise: Number,
+    totalPayablePaise: Number,
+    paidAmountPaise: { type: Number, default: 0 },
+    principalOutstandingPaise: Number,
+    interestOutstandingPaise: { type: Number, default: 0 },
+    feesOutstandingPaise: { type: Number, default: 0 },
+    // ------------------------------
     transactions: [
         {
             type: {
                 type: String,
-                enum: ['payment', 'interest_payment', 'credit_added', 'loan_given'],
+                enum: ['payment', 'interest_payment', 'credit_added', 'loan_given', 'interest_accrued'],
                 required: true
             },
             amount: {
-                type: Number,
-                required: true
+                type: Number, // Legacy
             },
+            amountPaise: {
+                type: Number, // V2
+            },
+            principalAllocationPaise: Number,
+            interestAllocationPaise: Number,
+            feesAllocationPaise: Number,
             note: String,
             recordedAt: {
                 type: Date,
                 default: Date.now
             },
-            recordedBy: String
+            effectiveAt: {
+                type: Date
+            },
+            recordedBy: String,
+            intentId: String // For idempotency
         }
     ]
 }, {

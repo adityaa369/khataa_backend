@@ -606,3 +606,152 @@ exports.deleteChitFund = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+// @desc Get vacant/public chit funds available to join
+// @route GET /api/chit-funds/vacant
+exports.getVacantChits = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        // Find active chit funds where user is NOT already a member and not the owner
+        const chits = await ChitFund.find({
+            status: { $in: ['pending', 'active'] },
+            owner: { $ne: userId },
+            'members.user': { $ne: userId },
+            isPublic: true
+        }).sort({ createdAt: -1 }).limit(20);
+        res.json({ success: true, chits });
+    } catch (err) {
+        const isProd = process.env.NODE_ENV === 'production';
+        res.status(500).json({ success: false, message: isProd ? 'Server error' : err.message });
+    }
+};
+
+// @desc Place bid in active auction (HTTP fallback)
+// @route POST /api/chit-funds/:id/place-bid
+exports.placeBid = async (req, res) => {
+    try {
+        const { amount } = req.body;
+        const userId = req.user.id;
+        const chitId = req.params.id;
+
+        if (!amount || amount <= 0) {
+            return res.status(400).json({ success: false, message: 'Valid bid amount required' });
+        }
+
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit fund not found' });
+        if (chit.status !== 'active') return res.status(400).json({ success: false, message: 'No active auction' });
+
+        const member = chit.members && chit.members.find(m => m.user === userId);
+        if (!member) return res.status(403).json({ success: false, message: 'Not a member of this chit' });
+        if (member.hasWon) return res.status(400).json({ success: false, message: 'You have already won a previous auction' });
+
+        // Find or create auction for current month
+        let auction = chit.auctions && chit.auctions.find(a => a.monthNumber === chit.currentMonth && a.status === 'open');
+        if (!auction) return res.status(400).json({ success: false, message: 'No open auction for current month' });
+
+        // Validate bid amount is within range
+        const minBid = chit.monthlyContribution * 0.5; // at least 50% of monthly
+        const maxBid = chit.totalValue;
+        if (amount < minBid || amount > maxBid) {
+            return res.status(400).json({ success: false, message: `Bid must be between ₹${minBid} and ₹${maxBid}` });
+        }
+
+        // Add bid to auction
+        if (!auction.bids) auction.bids = [];
+        auction.bids.push({ userId, amount, placedAt: new Date() });
+        await chit.save();
+
+        // Find current lowest bid
+        const lowestBid = auction.bids.reduce((min, b) => b.amount < min.amount ? b : min, auction.bids[0]);
+
+        res.json({ success: true, message: 'Bid placed', currentLowestBid: lowestBid.amount, yourBid: amount });
+    } catch (err) {
+        const isProd = process.env.NODE_ENV === 'production';
+        res.status(500).json({ success: false, message: isProd ? 'Server error' : err.message });
+    }
+};
+
+// @desc Declare winner for current month auction
+// @route POST /api/chit-funds/:id/declare-winner
+exports.declareWinner = async (req, res) => {
+    try {
+        const chitId = req.params.id;
+        const userId = req.user.id;
+
+        const chit = await ChitFund.findById(chitId);
+        if (!chit) return res.status(404).json({ success: false, message: 'Chit fund not found' });
+        if (chit.owner !== userId) return res.status(403).json({ success: false, message: 'Only admin can declare winner' });
+
+        const auction = chit.auctions && chit.auctions.find(a => a.monthNumber === chit.currentMonth && a.status === 'open');
+        if (!auction || !auction.bids || auction.bids.length === 0) {
+            return res.status(400).json({ success: false, message: 'No bids found for this auction' });
+        }
+
+        // Winner = lowest bidder
+        const winnerBid = auction.bids.reduce((min, b) => b.amount < min.amount ? b : min, auction.bids[0]);
+        
+        // Mark winner
+        auction.status = 'closed';
+        auction.winnerId = winnerBid.userId;
+        auction.winnerBid = winnerBid.amount;
+        auction.closedAt = new Date();
+
+        // Update member hasWon
+        const winnerMember = chit.members.find(m => m.user === winnerBid.userId);
+        if (winnerMember) winnerMember.hasWon = true;
+
+        // Add to winner history
+        if (!chit.winnerHistory) chit.winnerHistory = [];
+        chit.winnerHistory.push({
+            month: chit.currentMonth,
+            userId: winnerBid.userId,
+            amount: winnerBid.amount,
+            date: new Date()
+        });
+
+        await chit.save();
+
+        // Send FCM to winner if possible
+        try {
+            const User = require('../models/User');
+            const winner = await User.findOne({ id: winnerBid.userId });
+            if (winner && winner.fcmToken) {
+                const { sendNotification } = require('../utils/notifications');
+                await sendNotification(winner.fcmToken, 'Congratulations! 🎉', `You won the auction for ${chit.name}! Amount: ₹${winnerBid.amount}`);
+            }
+        } catch (_) {}
+
+        res.json({ success: true, winner: { userId: winnerBid.userId, amount: winnerBid.amount }, auction });
+    } catch (err) {
+        const isProd = process.env.NODE_ENV === 'production';
+        res.status(500).json({ success: false, message: isProd ? 'Server error' : err.message });
+    }
+};
+
+// @desc Get current auction status for a chit fund month
+// @route GET /api/chit-funds/:id/auction-status
+exports.getAuctionStatus = async (req, res) => {
+    try {
+        const chit = await ChitFund.findById(req.params.id);
+        if (!chit) return res.status(404).json({ success: false, message: 'Not found' });
+
+        const auction = chit.auctions && chit.auctions.find(a => a.monthNumber === chit.currentMonth);
+        const bidCount = auction && auction.bids ? auction.bids.length : 0;
+        const lowestBid = auction && auction.bids && auction.bids.length > 0
+            ? auction.bids.reduce((min, b) => b.amount < min.amount ? b : min, auction.bids[0]).amount
+            : null;
+
+        res.json({
+            success: true,
+            auctionStatus: auction ? auction.status : 'not_started',
+            currentMonth: chit.currentMonth,
+            bidCount,
+            lowestBid,
+            auctionOpenedAt: auction ? auction.openedAt : null,
+            winner: auction && auction.status === 'closed' ? { userId: auction.winnerId, amount: auction.winnerBid } : null
+        });
+    } catch (err) {
+        const isProd = process.env.NODE_ENV === 'production';
+        res.status(500).json({ success: false, message: isProd ? 'Server error' : err.message });
+    }
+};

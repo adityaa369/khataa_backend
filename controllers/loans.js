@@ -1,5 +1,6 @@
 const Notification = require('../models/Notification');
 const Loan = require('../models/Loan');
+const { parseRupeesToPaise } = require('../utils/money');
 const User = require('../models/User');
 const { sendOtp } = require('../utils/otpProvider');
 const { sendPushNotification } = require('../utils/fcm');
@@ -9,6 +10,7 @@ const { loanGivenTemplate, paymentRecordedTemplate, loanClosedTemplate } = requi
 const axios = require('axios');
 const { invalidateLoanCache } = require('../middleware/cache');
 const { cacheGet, cacheSet, cacheInvalidate } = require('../config/redis');
+const { loanSerializer, chitFundSerializer } = require('../utils/loanSerializer');
 
 function sendError(res, err, status = 500) {
     const isProd = process.env.NODE_ENV === 'production';
@@ -64,7 +66,8 @@ exports.createLoan = async (req, res) => {
             duration_type,
             type,
             transaction_id,
-            documentUrl
+            documentUrl,
+            documentId
         } = req.body;
 
         // Sanitize phone: strip 91 or +91
@@ -139,15 +142,15 @@ exports.createLoan = async (req, res) => {
             borrowerAadhar,
             borrowerAddress,
             amount,
+            amountPaise: parseRupeesToPaise(amount),
             interestRate,
             durationMonths,
             durationType,
             loanType,
-            status: 'pending_otp',
+            status: 'pending_approval',
             transaction_id,
             documentUrl,
-            otp: 'FIREBASE_OTP',
-            isOtpVerified: false
+            documentId
         });
         
         await invalidateLoanCache(loan.lender, loan.borrower);
@@ -208,7 +211,7 @@ exports.getGivenLoans = async (req, res) => {
                 }
             }
             
-            loansMapped.push(loanObj);
+            loansMapped.push(loanSerializer(loanObj));
         }
         
         // --- CHIT FUNDS AGGREGATION ---
@@ -216,22 +219,15 @@ exports.getGivenLoans = async (req, res) => {
         const ownedChits = await ChitFund.find({ owner: req.user.id });
 
         for (const chit of ownedChits) {
-            loansMapped.push({
-                _id: chit._id,
-                loanType: 'chitfund',
-                amount: chit.totalValue,
-                interestRate: 0,
-                durationMonths: chit.totalMonths,
+            loansMapped.push(chitFundSerializer(chit, {
                 status: chit.status === 'completed' ? 'completed' : 'active',
                 progress: (chit.completedMonths || 0) / (chit.totalMonths || 1),
                 startDate: chit.startDate || chit.createdAt,
-                endDate: null,
                 lenderName: `${req.user.firstName || ''} ${req.user.lastName || ''}`,
                 borrowerName: `${chit.currentSubscribersCount} Member(s)`,
                 borrowerPhone: 'N/A',
-                emiAmount: chit.monthlySubscription,
                 createdAt: chit.createdAt
-            });
+            }));
         }
         
         loansMapped.sort((a, b) => {
@@ -278,7 +274,7 @@ exports.getTakenLoans = async (req, res) => {
                 loanObj.lenderName = 'Unknown Lender';
                 loanObj.lenderPhone = '';
             }
-            loansWithLender.push(loanObj);
+            loansWithLender.push(loanSerializer(loanObj));
         }
 
         // --- CHIT SUBSCRIPTIONS AGGREGATION ---
@@ -293,22 +289,16 @@ exports.getTakenLoans = async (req, res) => {
             const groupOwner = await User.findOne({ id: chitFund.owner });
             const ownerName = groupOwner ? `${groupOwner.firstName || ''} ${groupOwner.lastName || ''}`.trim() : 'Unknown Network';
 
-            loansWithLender.push({
+            loansWithLender.push(chitFundSerializer(chitFund, {
                 _id: sub._id,
-                loanType: 'chitfund',
-                amount: chitFund.totalValue,
-                interestRate: 0,
-                durationMonths: chitFund.totalMonths,
                 status: sub.status === 'completed' ? 'completed' : 'active',
                 progress: (sub.installmentsPaid || 0) / (chitFund.totalMonths || 1),
                 startDate: chitFund.startDate || chitFund.createdAt,
-                endDate: null,
                 lenderName: ownerName,
                 borrowerName: `${req.user.firstName || ''} ${req.user.lastName || ''}`,
                 borrowerPhone: req.user.phone,
-                emiAmount: chitFund.monthlySubscription,
                 createdAt: sub.createdAt
-            });
+            }));
         }
 
         // Sort combined list by created date descending
@@ -358,11 +348,12 @@ exports.verifyLoan = async (req, res) => {
         loan.activatedAt = Date.now();
         loan.borrower = req.user.id; // Link the borrower's actual user ID
 
-        // Calculate EMI, Total Payable, and Dates
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+        await FinancialLedgerService.activateLoan(loan, parseRupeesToPaise(loan.amount), req.user.id, loan.activatedAt);
+
+        // Calculate Dates
         if (loan.durationMonths && loan.durationMonths > 0) {
             const startDate = new Date(loan.startDate);
-
-            // Set end date based on duration
             const endDate = new Date(startDate);
             const nextDueDate = new Date(startDate);
             
@@ -376,41 +367,10 @@ exports.verifyLoan = async (req, res) => {
             
             loan.endDate = endDate;
             loan.nextDueDate = nextDueDate;
-
-            if (loan.loanType === 'interest_credit' || loan.loanType === 'home' || loan.loanType === 'interestcredit') {
-                const P = loan.amount;
-                const monthlyInterest = P * (loan.interestRate || 0) / 100;
-                loan.emiAmount = monthlyInterest;
-                loan.totalPayable = P + (monthlyInterest * (loan.durationMonths || 1));
-            } else if (loan.interestRate > 0) {
-                const P = loan.amount;
-                const r = loan.interestRate / 100 / 12; // Monthly rate
-                const n = loan.durationType === 'Days' ? (loan.durationMonths / 30) : loan.durationMonths;
-
-                const emi = P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
-                loan.emiAmount = emi;
-                loan.totalPayable = emi * (loan.durationType === 'Days' ? 1 : n);
-            } else {
-                loan.emiAmount = loan.amount / loan.durationMonths;
-                loan.totalPayable = loan.amount;
-            }
-        } else {
-            loan.totalPayable = loan.amount;
         }
 
         console.log(`[DEBUG] Match! Activating Loan ${loan._id}`);
-        // Seed initial loan_given transaction
-        if (!loan.transactions) loan.transactions = [];
-        if (loan.transactions.length === 0) {
-            loan.transactions.push({
-                type: 'loan_given',
-                amount: loan.amount,
-                note: 'Loan disbursed to borrower',
-                recordedAt: new Date(loan.startDate || Date.now()),
-                recordedBy: loan.lender
-            });
-        }
-        loan.paidAmount = 0;
+
         await loan.save();
 
         // Send email notification to borrower
@@ -626,108 +586,68 @@ exports.verifyLenderOtp = async (req, res) => {
     }
 };
 
-// @desc    Close loan & Generate Certificate with Mutual Authentication OTP
+// @desc    Close loan
 // @route   POST /api/loans/:id/close
 // @access  Private (Lender)
 exports.closeLoan = async (req, res) => {
     try {
-        const { otp, verificationId } = req.body;
+        const { intentId } = req.body;
+        const Loan = require('../models/Loan');
+        const TransactionIntent = require('../models/TransactionIntent');
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+        const { cacheInvalidate } = require('../middleware/cache');
+        const { invalidateLoanCache } = require('../utils/cacheUtils');
+
         const loan = await Loan.findById(req.params.id);
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can close this loan' });
+        if (loan.status === 'closed') return res.status(200).json({ success: true, message: 'Loan is already closed', loan });
 
-        if (!loan) {
-            return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (!intentId) return res.status(400).json({ success: false, message: 'intentId is required' });
+
+        // Atomic upsert to prevent race conditions
+        let intent = await TransactionIntent.findOneAndUpdate(
+            { intentId },
+            {
+                $setOnInsert: {
+                    intentId,
+                    loanId: loan._id,
+                    action: 'CLOSE_LOAN',
+                    userId: req.user.id,
+                    status: 'PENDING'
+                }
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        if (intent.status === 'COMMITTED') {
+            return res.status(200).json({ success: true, message: 'Loan successfully closed (idempotent).', loan });
+        } else if (intent.status === 'REJECTED') {
+            return res.status(400).json({ success: false, message: 'Transaction intent was previously rejected' });
         }
 
-        if (loan.lender !== req.user.id) {
-            return res.status(403).json({ success: false, message: 'Only lender can close this loan' });
-        }
-
-        if (loan.status === 'closed') {
-            return res.status(400).json({ success: false, message: 'Loan is already closed' });
-        }
-
-        if (!verificationId) {
-            return res.status(400).json({ success: false, message: 'verificationId is required' });
-        }
-
-        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
-        if (!verificationResult.success) {
-            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
-        }
-
-        const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
-        const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
-        if (returnedPhone !== loanPhone) {
-            return res.status(400).json({
-                success: false,
-                message: `OTP verified phone (+91${returnedPhone}) does not match borrower phone (+91${loanPhone})`
-            });
-        }
-
-        loan.status = 'completed';
-        loan.progress = 1.0;
-        loan.isOtpVerified = true; // reusing field just to mark full authentication
-        
-        
         try {
-            const { generateAndUploadClosureCertificate } = require('../utils/pdfGenerator');
-            const pdfUrl = await generateAndUploadClosureCertificate(loan);
-            if (pdfUrl) {
-                // If there's an existing document string, we append or replace. We'll replace it.
-                loan.documentUrl = pdfUrl; 
-            }
-        } catch (pdfErr) {
-            console.error('[Loans] PDF generation failed, skipping:', pdfErr);
+            await FinancialLedgerService.closeLoan(loan, new Date());
+        } catch (e) {
+            intent.status = 'REJECTED';
+            await intent.save();
+            return res.status(400).json({ success: false, message: e.message });
         }
 
+        loan.status = 'closed';
+        loan.progress = 1.0;
         await loan.save();
 
-        // Send closure confirmation email
-        try {
-            const borrowerUserEmail = await User.findOne({ id: loan.borrower });
-            if (borrowerUserEmail && borrowerUserEmail.email) {
-                await sendEmail({
-                    to: borrowerUserEmail.email,
-                    subject: `Credit Agreement Closed — ₹${loan.amount.toLocaleString('en-IN')}`,
-                    html: loanClosedTemplate({
-                        borrowerName: `${borrowerUserEmail.firstName || ''} ${borrowerUserEmail.lastName || ''}`.trim() || borrowerUserEmail.phone,
-                        lenderName: req.user ? `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() : 'Your Lender',
-                        amount: loan.amount,
-                        closedDate: new Date().toLocaleDateString('en-IN'),
-                        loanId: loan._id.toString()
-                    })
-                });
-            }
-        } catch (emailErr) {
-            console.error('[Loans] closure email failed:', emailErr.message);
-        }
+        intent.status = 'COMMITTED';
+        await intent.save();
+
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
-
-        const { sendPushNotification } = require('../utils/fcm');
-        
-        if (req.user && req.user.fcmToken) {
-            sendPushNotification(
-                req.user.fcmToken,
-                'Agreement Closed',
-                `The loan agreement for ₹${loan.amount} has been successfully closed.`,
-                { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM Lender close notification failed:', err.message));
-        }
-
-        const borrowerUser = await User.findOne({ id: loan.borrower });
-        if (borrowerUser && borrowerUser.fcmToken) {
-            sendPushNotification(
-                borrowerUser.fcmToken,
-                'Agreement Closed',
-                `Your loan agreement for ₹${loan.amount} has been successfully closed.`,
-                { type: 'LOAN_CLOSED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM Borrower close notification failed:', err.message));
-        }
 
         res.status(200).json({ success: true, message: 'Loan successfully closed.', loan });
     } catch (err) {
         console.error('[Loans] closeLoan Error:', err.message);
+        const { sendError } = require('../utils/response');
         sendError(res, err);
     }
 };
@@ -743,14 +663,14 @@ exports.uploadDocument = async (req, res) => {
         const ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png'];
         const ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
         
-        // Sanitize filename — strip directory traversal, allow only safe chars
+        // Sanitize filename
         const sanitizedName = (fileName || 'document')
             .replace(/[^a-zA-Z0-9._\-]/g, '_')
             .replace(/\.\./g, '')
             .substring(0, 100);
         
         const ext = require('path').extname(sanitizedName).toLowerCase();
-        if (!ALLOWED_EXTENSIONS.includes(ext)) {
+        if (!ALLOWED_EXTENSIONS.includes(ext) && ext !== '') {
             return res.status(400).json({
                 success: false,
                 message: `File type not allowed. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`
@@ -764,12 +684,12 @@ exports.uploadDocument = async (req, res) => {
             });
         }
         
-        // Validate base64 size (max 4MB decoded)
+        // Validate base64 size (max 5MB decoded)
         const estimatedSize = (base64Data.length * 3) / 4;
-        if (estimatedSize > 4 * 1024 * 1024) {
+        if (estimatedSize > 5 * 1024 * 1024) {
             return res.status(400).json({
                 success: false,
-                message: 'File too large. Maximum size is 4MB.'
+                message: 'File too large. Maximum size is 5MB.'
             });
         }
 
@@ -778,181 +698,20 @@ exports.uploadDocument = async (req, res) => {
         }
 
         const buffer = Buffer.from(base64Data, 'base64');
-        try {
-            const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
-            const bucket = admin.storage().bucket(bucketName);
-            const file = bucket.file(filename);
+        const GridFSService = require('../services/GridFSService');
+        
+        const documentId = await GridFSService.uploadDocument(buffer, sanitizedName, fileType, {
+            uploadedBy: req.user.id,
+            size: buffer.length,
+            createdAt: new Date()
+        });
 
-            await file.save(buffer, {
-                metadata: {
-                    contentType: fileType || 'image/jpeg',
-                },
-                public: true
-            });
-            await file.makePublic();
-            const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filename}`;
-            console.log(`[Upload] Uploaded successfully to Firebase: ${publicUrl}`);
-            return res.status(200).json({ success: true, url: publicUrl });
-        } catch (firebaseError) {
-            console.error('[Upload] Firebase upload failed (billing delinquent or config issue):', firebaseError.message);
-            
-            // Fallback to local storage
-            const uploadsDir = path.join(__dirname, '..', 'uploads');
-            if (!fs.existsSync(uploadsDir)) {
-                fs.mkdirSync(uploadsDir, { recursive: true });
-            }
+        console.log(`[Upload] Uploaded successfully to GridFS: ${documentId}`);
+        return res.status(200).json({ success: true, documentId: documentId.toString() });
 
-            const localFilename = `${Date.now()}_${sanitizedName}`;
-            const localPath = path.join(uploadsDir, localFilename);
-            fs.writeFileSync(localPath, buffer);
-
-            // Determine server URL prefix
-            const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-            const host = req.get('host');
-            const localUrl = `${protocol}://${host}/uploads/${localFilename}`;
-            console.log(`[Upload] Fallback: saved locally at ${localUrl}`);
-
-            return res.status(200).json({ success: true, url: localUrl });
-        }
     } catch (err) {
-        console.error('[Upload] Controller Error:', err.message);
-        return sendError(res, err);
+        console.error('[Upload] Upload failed:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error during upload' });
     }
 };
 
-// ─── Custom Payment Transactions ──────────────────────────────────────────
-
-async function _handleCustomTransaction(req, res, actionType) {
-    try {
-        const { amount, otp, verificationId } = req.body;
-        const Loan = require('../models/Loan');
-        const { updateCreditScore } = require('../utils/creditScoreCalc');
-        const loan = await Loan.findById(req.params.id);
-
-        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
-        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
-        
-        if (!amount || amount <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
-
-        if (!verificationId) {
-            return res.status(400).json({ success: false, message: 'verificationId is required' });
-        }
-
-        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
-        if (!verificationResult.success) {
-            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
-        }
-
-        const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
-        const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
-        if (returnedPhone !== loanPhone) {
-            return res.status(400).json({ success: false, message: 'OTP verified phone does not match borrower phone' });
-        }
-
-        let notifTitle = 'Transaction Complete';
-        let notifBody = '';
-
-        if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-            loan.totalPayable = Math.max(0, loan.totalPayable - amount);
-            loan.paidAmount = (loan.paidAmount || 0) + amount;
-            notifTitle = 'Payment Recorded';
-            notifBody = `Your lender recorded a payment of ₹${amount}. Your remaining balance is ₹${loan.totalPayable}.`;
-            if (!loan.transactions) loan.transactions = [];
-            loan.transactions.push({
-                type: actionType === 'recordInterest' ? 'interest_payment' : 'payment',
-                amount,
-                note: actionType === 'recordInterest' ? 'Interest payment recorded' : 'Principal payment recorded',
-                recordedAt: new Date(),
-                recordedBy: req.user.id
-            });
-        } else if (actionType === 'addCredit') {
-            loan.totalPayable += amount;
-            notifTitle = 'Credit Added';
-            notifBody = `Your lender added a credit of ₹${amount}. Your total payable is now ₹${loan.totalPayable}.`;
-            if (!loan.transactions) loan.transactions = [];
-            loan.transactions.push({
-                type: 'credit_added',
-                amount,
-                note: 'Credit added by lender',
-                recordedAt: new Date(),
-                recordedBy: req.user.id
-            });
-        }
-
-        if (loan.totalPayable <= 0) {
-            loan.status = 'completed';
-            loan.progress = 1.0;
-        } else {
-            let originalTotalPayable = loan.amount;
-            if (loan.loanType === 'interest_credit' || loan.loanType === 'home' || loan.loanType === 'interestcredit') {
-                const P = loan.amount;
-                const monthlyInterest = P * (loan.interestRate || 0) / 100;
-                originalTotalPayable = P + (monthlyInterest * (loan.durationMonths || 1));
-            } else if (loan.interestRate > 0) {
-                const P = loan.amount;
-                const r = loan.interestRate / 100 / 12;
-                const n = loan.durationType === 'Days' ? (loan.durationMonths / 30) : loan.durationMonths;
-                const emi = P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
-                originalTotalPayable = emi * (loan.durationType === 'Days' ? 1 : n);
-            }
-            
-            if (originalTotalPayable > 0) {
-                const totalPaid = Math.max(0, originalTotalPayable - loan.totalPayable);
-                loan.progress = Math.max(0, Math.min(1.0, totalPaid / originalTotalPayable));
-            }
-        }
-
-        await loan.save();
-
-        // Send payment confirmation email to borrower
-        if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-            try {
-                const borrowerUserForEmail = await User.findOne({ id: loan.borrower });
-                const lenderUserForEmail = await User.findOne({ id: loan.lender });
-                if (borrowerUserForEmail && borrowerUserForEmail.email) {
-                    await sendEmail({
-                        to: borrowerUserForEmail.email,
-                        subject: `Payment Recorded — ₹${amount.toLocaleString('en-IN')} on your credit`,
-                        html: paymentRecordedTemplate({
-                            borrowerName: `${borrowerUserForEmail.firstName || ''} ${borrowerUserForEmail.lastName || ''}`.trim() || borrowerUserForEmail.phone,
-                            lenderName: lenderUserForEmail ? `${lenderUserForEmail.firstName || ''} ${lenderUserForEmail.lastName || ''}`.trim() : 'Your Lender',
-                            amountPaid: amount,
-                            remainingBalance: loan.totalPayable,
-                            paymentDate: new Date().toLocaleDateString('en-IN'),
-                            loanId: loan._id.toString()
-                        })
-                    });
-                }
-            } catch (emailErr) {
-                console.error('[Loans] payment email failed:', emailErr.message);
-            }
-        }
-        await invalidateLoanCache(loan.lender, loan.borrower);
-
-        if (loan.borrower) {
-            await updateCreditScore(loan.borrower);
-            
-            const User = require('../models/User');
-            const borrowerUser = await User.findOne({ id: loan.borrower });
-            if (borrowerUser && borrowerUser.fcmToken) {
-                const { sendPushNotification } = require('../utils/fcm');
-                sendPushNotification(
-                    borrowerUser.fcmToken,
-                    notifTitle,
-                    notifBody,
-                    { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
-                ).catch(err => console.error('[Loans] FCM transaction notification failed:', err.message));
-            }
-        }
-
-        res.status(200).json({ success: true, loan, transactions: loan.transactions || [] });
-    } catch (err) {
-        console.error('[Loans] customTransaction Error:', err.message);
-        sendError(res, err);
-    }
-}
-
-exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'recordPayment');
-exports.addCredit = (req, res) => _handleCustomTransaction(req, res, 'addCredit');
-exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');

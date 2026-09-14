@@ -8,7 +8,8 @@ const router = express.Router();
 router.post('/', protect, chitFundsController.createChitFund);
 
 // --- Specific list routes (must come before /:id) ---
-router.get('/managed', protect, chitFundsController.getManagedChitFunds);
+router.get('/vacant', protect, chitFundsController.getVacantChits);
+router.get('/managed', protect, chitFundsController.getManagedChits || chitFundsController.getManagedChitFunds);
 router.get('/joined', protect, chitFundsController.getJoinedChitFunds);
 router.get('/invites', protect, chitFundsController.getPendingInvites);
 
@@ -25,6 +26,8 @@ router.post('/:id/open-auction-month', protect, chitFundsController.openAuctionM
 router.post('/:id/bid', protect, chitFundsController.submitBid);
 router.get('/:id/bids', protect, chitFundsController.getBids);
 router.post('/:id/declare-winner', protect, chitFundsController.declareWinner);
+router.post('/:id/place-bid', protect, chitFundsController.placeBid);
+router.get('/:id/auction-status', protect, chitFundsController.getAuctionStatus);
 
 // --- Payment verification (owner) ---
 router.post('/:id/verify-payment', protect, chitFundsController.verifyMonthPayment);

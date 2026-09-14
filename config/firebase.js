@@ -28,7 +28,8 @@ try {
         admin.initializeApp();
     }
 } catch (error) {
-    console.error('[Firebase] Initialization Error:', error.message);
+    console.error('[Firebase] Initialization Error: Server cannot start without a healthy authentication subsystem.', error.stack);
+    process.exit(1);
 }
 
 module.exports = admin;
