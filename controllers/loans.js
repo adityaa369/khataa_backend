@@ -790,38 +790,47 @@ exports.uploadDocument = async (req, res) => {
 // Custom Payment Transactions
 async function _handleCustomTransaction(req, res, actionType) {
     try {
-        const { amount, otp, verificationId } = req.body;
+        const { amountPaise, idToken, intentId } = req.body;
+        // Fallback for strict amount parsing
+        const pa = amountPaise || (req.body.amount ? Math.round(req.body.amount * 100) : 0);
+
         const loan = await Loan.findById(req.params.id);
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
         if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
         if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
-        if (!amount || amount <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
-        if (!verificationId && otp !== '124124') return res.status(400).json({ success: false, message: 'verificationId is required' });
-        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
-        if (!verificationResult.success) return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
-        if (!verificationResult.isBackdoor) {
-            const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
-            const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
-            if (returnedPhone !== loanPhone) return res.status(400).json({ success: false, message: 'OTP verified phone does not match borrower phone' });
+        if (!pa || pa <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
+        
+        if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required' });
+        const { verifyFirebaseToken } = require('../utils/otpProvider');
+        const verificationResult = await verifyFirebaseToken(idToken);
+        if (!verificationResult.success) {
+            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid ID Token' });
         }
+
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+        
         let notifTitle = 'Transaction Complete', notifBody = '';
         if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-            loan.totalPayable = Math.max(0, loan.totalPayable - amount);
-            loan.paidAmount = (loan.paidAmount || 0) + amount;
+            await FinancialLedgerService.recordPayment(loan, pa, intentId, req.user.id);
             notifTitle = 'Payment Recorded';
-            notifBody = `Your lender recorded a payment of Rs.${amount}. Remaining: Rs.${loan.totalPayable}.`;
+            notifBody = `Your lender recorded a payment of Rs.${pa / 100}. Remaining: Rs.${loan.totalPayablePaise / 100}.`;
         } else if (actionType === 'addCredit') {
-            loan.totalPayable += amount;
+            await FinancialLedgerService.addCredit(loan, pa, intentId, req.user.id);
             notifTitle = 'Credit Added';
-            notifBody = `Your lender added Rs.${amount}. Total payable: Rs.${loan.totalPayable}.`;
+            notifBody = `Your lender added Rs.${pa / 100}. Total payable: Rs.${loan.totalPayablePaise / 100}.`;
         }
-        if (loan.totalPayable <= 0) { loan.status = 'completed'; loan.progress = 1.0; }
+        
         await loan.save();
+        const { invalidateLoanCache } = require('../utils/cacheUtils');
         await invalidateLoanCache(loan.lender, loan.borrower);
+        
         if (loan.borrower) {
+            const { updateCreditScore } = require('../utils/creditScore');
             await updateCreditScore(loan.borrower);
+            const User = require('../models/User');
             const borrowerUser = await User.findOne({ id: loan.borrower });
             if (borrowerUser && borrowerUser.fcmToken) {
+                const { sendPushNotification } = require('../utils/fcm');
                 sendPushNotification(borrowerUser.fcmToken, notifTitle, notifBody, { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }).catch(()=>{});
             }
         }
