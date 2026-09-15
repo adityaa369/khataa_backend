@@ -193,7 +193,7 @@ exports.createLoan = async (req, res) => {
             durationMonths,
             durationType,
             loanType,
-            status: 'pending_otp',
+            status: 'pending_approval',
             transaction_id: effectiveTransactionId,
             documentUrl,
             documentId
@@ -382,33 +382,48 @@ exports.getTakenLoans = async (req, res) => {
 // @access  Private (Borrower)
 exports.verifyLoan = async (req, res) => {
     try {
-        console.log('\n--- LOAN APPROVAL DEBUG ---');
-        console.log('Loan ID received:', req.params.id);
-
-        const currentUserPhone = String(req.user.phone).replace(/\D/g, '').slice(-10);
-        console.log('User attempting approval:', currentUserPhone);
-
+        const { intentId, idToken } = req.body;
         const loan = await Loan.findById(req.params.id);
 
-        if (!loan) {
-            console.error(`[Loans] Loan ${req.params.id} not found.`);
-            return res.status(404).json({ success: false, message: 'Loan not found' });
-        }
-
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        
         if (loan.status !== 'pending_approval') {
             return res.status(400).json({ success: false, message: 'Loan is not ready for approval or already active.' });
         }
 
-        const isBorrower = String(loan.borrowerPhone).replace(/\D/g, '').slice(-10) === currentUserPhone;
+        const isBorrower = String(loan.borrowerPhone).replace(/\D/g, '').slice(-10) === String(req.user.phone).replace(/\D/g, '').slice(-10);
+        if (!isBorrower) return res.status(403).json({ success: false, message: 'Only the designated borrower can approve this loan.' });
 
-        if (!isBorrower) {
-            return res.status(403).json({ success: false, message: 'Only the designated borrower can approve this loan.' });
+        if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required for financial authorization' });
+        
+        const { verifyFirebaseToken } = require('../utils/otpProvider');
+        const verificationResult = await verifyFirebaseToken(idToken);
+        if (!verificationResult.success) {
+            return res.status(400).json({ success: false, message: 'Invalid ID Token' });
+        }
+        
+        const returnedPhone = verificationResult.mobile.replace(/\D/g, '').slice(-10);
+        if (returnedPhone !== String(req.user.phone).replace(/\D/g, '').slice(-10)) {
+            return res.status(403).json({ success: false, message: 'ID Token identity does not match authenticated session' });
+        }
+
+        if (!intentId) return res.status(400).json({ success: false, message: 'intentId is required for this action' });
+        
+        const TransactionIntent = require('../models/TransactionIntent');
+        const intent = await TransactionIntent.findOneAndUpdate(
+            { intentId, loanId: loan._id, action: 'ACCEPT_LOAN', status: 'PENDING' },
+            { status: 'COMPLETED' },
+            { new: true }
+        );
+        
+        if (!intent) {
+            return res.status(400).json({ success: false, message: 'Invalid, expired, or already consumed Transaction Intent' });
         }
 
         loan.status = 'active';
         loan.startDate = Date.now();
         loan.activatedAt = Date.now();
-        loan.borrower = req.user.id; // Link the borrower's actual user ID
+        loan.borrower = req.user.id; 
 
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         await FinancialLedgerService.activateLoan(loan, loan.amountPaise, req.user.id, loan.activatedAt);
@@ -426,18 +441,13 @@ exports.verifyLoan = async (req, res) => {
                 endDate.setMonth(endDate.getMonth() + loan.durationMonths);
                 nextDueDate.setMonth(nextDueDate.getMonth() + 1);
             }
-            
             loan.endDate = endDate;
             loan.nextDueDate = nextDueDate;
         }
 
-        console.log(`[DEBUG] Match! Activating Loan ${loan._id}`);
-
         await loan.save();
 
-        // Send email notification to borrower
         try {
-            if (req.user.email) {
                 const lenderUser = await User.findOne({ id: loan.lender });
                 await sendEmail({
                     to: req.user.email,
