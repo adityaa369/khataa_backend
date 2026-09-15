@@ -70,14 +70,49 @@ exports.createLoan = async (req, res) => {
             idempotency_key,
         } = req.body;
 
-        // Normalise: Flutter sends amountPaise (integer paise); legacy sends amount (float rupees)
-        let amount, amountPaiseNorm;
-        if (req.body.amountPaise !== undefined && req.body.amountPaise !== null) {
-            amountPaiseNorm = parseInt(req.body.amountPaise, 10);
-            amount = amountPaiseNorm / 100.0;
+        // --- STRICT FINANCIAL CONTRACT ENFORCEMENT ---
+        const amountPaiseRaw = req.body.amountPaise;
+        const amountRaw = req.body.amount;
+        let canonicalAmountPaise;
+
+        function parseAmountToPaiseStrict(val) {
+            if (val === undefined || val === null) return null;
+            let str = val.toString().trim();
+            if (!/^\d+(\.\d{1,2})?$/.test(str)) return null;
+            const parts = str.split('.');
+            const rupees = parseInt(parts[0], 10);
+            let paise = 0;
+            if (parts[1]) {
+                paise = parseInt(parts[1].length === 1 ? parts[1] + '0' : parts[1], 10);
+            }
+            return (rupees * 100) + paise;
+        }
+
+        if (amountPaiseRaw !== undefined && amountPaiseRaw !== null) {
+            if (!Number.isInteger(Number(amountPaiseRaw))) {
+                return res.status(400).json({ success: false, message: 'amountPaise must be an integer' });
+            }
+            canonicalAmountPaise = Number(amountPaiseRaw);
+
+            if (amountRaw !== undefined && amountRaw !== null) {
+                const parsedLegacy = parseAmountToPaiseStrict(amountRaw);
+                if (parsedLegacy === null || parsedLegacy !== canonicalAmountPaise) {
+                    return res.status(400).json({ success: false, message: 'amount and amountPaise mismatch or invalid format' });
+                }
+            }
+        } else if (amountRaw !== undefined && amountRaw !== null) {
+            const parsedLegacy = parseAmountToPaiseStrict(amountRaw);
+            if (parsedLegacy === null) {
+                return res.status(400).json({ success: false, message: 'Invalid amount format' });
+            }
+            canonicalAmountPaise = parsedLegacy;
         } else {
-            amount = parseFloat(req.body.amount);
-            amountPaiseNorm = Math.round(amount * 100);
+            return res.status(400).json({ success: false, message: 'Amount is required' });
+        }
+
+        if (canonicalAmountPaise <= 0) {
+            return res.status(400).json({ success: false, message: 'Amount must be greater than 0' });
+        }
         }
 
         // Sanitize phone: strip 91 or +91
@@ -133,7 +168,7 @@ exports.createLoan = async (req, res) => {
         const duplicateLoan = await Loan.findOne({
             lender: req.user.id,
             borrowerPhone: borrowerPhone,
-            amountPaise: amountPaiseNorm,
+            amountPaise: canonicalAmountPaise,
             createdAt: { $gte: twoMinsAgo }
         });
 
@@ -153,7 +188,7 @@ exports.createLoan = async (req, res) => {
             borrowerAadhar,
             borrowerAddress,
             amount,
-            amountPaise: amountPaiseNorm,
+            amountPaise: canonicalAmountPaise,
             interestRate,
             durationMonths,
             durationType,
@@ -184,6 +219,7 @@ exports.createLoan = async (req, res) => {
         }
 
         const loanResponse = loan.toObject();
+        loanResponse.id = loan._id.toString();
 
         res.status(201).json({
             success: true,
