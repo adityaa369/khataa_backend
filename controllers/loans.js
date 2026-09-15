@@ -60,7 +60,7 @@ exports.createLoan = async (req, res) => {
             borrower_name,
             borrower_aadhar,
             borrower_address,
-            amountPaise,
+            amount,
             interest_rate,
             duration_months,
             duration_type,
@@ -122,7 +122,7 @@ exports.createLoan = async (req, res) => {
         const duplicateLoan = await Loan.findOne({
             lender: req.user.id,
             borrowerPhone: borrowerPhone,
-            amountPaise: amountPaise,
+            amount: amount,
             createdAt: { $gte: twoMinsAgo }
         });
 
@@ -141,8 +141,8 @@ exports.createLoan = async (req, res) => {
             borrowerPhone,
             borrowerAadhar,
             borrowerAddress,
-            amount: amountPaise / 100,
-            amountPaise: amountPaise,
+            amount,
+            amountPaise: parseRupeesToPaise(amount),
             interestRate,
             durationMonths,
             durationType,
@@ -246,6 +246,20 @@ exports.getGivenLoans = async (req, res) => {
 // @desc    Get loans taken by current user
 // @route   GET /api/loans/taken
 // @access  Private
+exports.getLoanById = async (req, res) => {
+    try {
+        const loan = await Loan.findById(req.params.id)
+            .populate('lender', 'firstName lastName phone')
+            .populate('borrower', 'firstName lastName phone');
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender.id !== req.user.id && loan.borrower.id !== req.user.id) return res.status(403).json({ success: false, message: 'Not authorized' });
+        res.status(200).json({ success: true, loan });
+    } catch (err) {
+        console.error('[Loans] getLoanById Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
 exports.getTakenLoans = async (req, res) => {
     try {
         const cacheKey = `loans:taken:${req.user.id}`;
@@ -715,140 +729,3 @@ exports.uploadDocument = async (req, res) => {
     }
 };
 
-
-// --- recordPayment ------------------------------------------------------------
-// @desc    Record a payment against a loan (fees?interest?principal waterfall)
-// @route   POST /api/loans/:id/record-payment
-// @access  Private (Lender)
-exports.recordPayment = async (req, res) => {
-    try {
-        const { amountPaise, idempotencyKey } = req.body;
-        const Loan = require('../models/Loan');
-        const TransactionIntent = require('../models/TransactionIntent');
-        const FinancialLedgerService = require('../services/FinancialLedgerService');
-        const { invalidateLoanCache } = require('../utils/cacheUtils');
-        const { parseRupeesToPaise } = require('../utils/money');
-
-        if (!amountPaise || typeof amountPaise !== 'number' || !Number.isInteger(amountPaise) || amountPaise <= 0) {
-            return res.status(400).json({ success: false, message: 'amountPaise must be a positive integer' });
-        }
-
-        const loan = await Loan.findById(req.params.id);
-        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can record payment' });
-        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
-
-        const intentId = idempotencyKey || require('crypto').randomUUID();
-
-        // Atomic idempotent intent
-        let intent = await TransactionIntent.findOneAndUpdate(
-            { intentId },
-            { $setOnInsert: { intentId, loanId: loan._id, action: 'PAYMENT', userId: req.user.id, status: 'PENDING' } },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
-
-        if (intent.status === 'COMMITTED') {
-            return res.status(200).json({ success: true, message: 'Payment already recorded (idempotent)' });
-        }
-
-        try {
-            await FinancialLedgerService.recordPayment(loan, amountPaise, req.user.id, new Date());
-        } catch (e) {
-            intent.status = 'REJECTED';
-            await intent.save();
-            return res.status(400).json({ success: false, message: e.message });
-        }
-
-        intent.status = 'COMMITTED';
-        await intent.save();
-
-        const updatedLoan = await Loan.findById(loan._id).lean();
-        await invalidateLoanCache(loan._id.toString());
-
-        return res.status(200).json({ success: true, message: 'Payment recorded', loan: require('../utils/loanSerializer').serializeLoan(updatedLoan) });
-    } catch (err) {
-        console.error('[recordPayment] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
-    }
-};
-
-// --- addCredit ----------------------------------------------------------------
-// @desc    Add additional credit to an active loan
-// @route   POST /api/loans/:id/add-credit
-// @access  Private (Lender)
-exports.addCredit = async (req, res) => {
-    try {
-        const { amountPaise, idempotencyKey } = req.body;
-        const Loan = require('../models/Loan');
-        const TransactionIntent = require('../models/TransactionIntent');
-        const FinancialLedgerService = require('../services/FinancialLedgerService');
-        const { invalidateLoanCache } = require('../utils/cacheUtils');
-
-        if (!amountPaise || typeof amountPaise !== 'number' || !Number.isInteger(amountPaise) || amountPaise <= 0) {
-            return res.status(400).json({ success: false, message: 'amountPaise must be a positive integer' });
-        }
-
-        const loan = await Loan.findById(req.params.id);
-        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can add credit' });
-        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
-
-        const intentId = idempotencyKey || require('crypto').randomUUID();
-
-        let intent = await TransactionIntent.findOneAndUpdate(
-            { intentId },
-            { $setOnInsert: { intentId, loanId: loan._id, action: 'ADD_CREDIT', userId: req.user.id, status: 'PENDING' } },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
-
-        if (intent.status === 'COMMITTED') {
-            return res.status(200).json({ success: true, message: 'Credit already added (idempotent)' });
-        }
-
-        try {
-            await FinancialLedgerService.addCredit(loan, amountPaise, req.user.id, new Date());
-        } catch (e) {
-            intent.status = 'REJECTED';
-            await intent.save();
-            return res.status(400).json({ success: false, message: e.message });
-        }
-
-        intent.status = 'COMMITTED';
-        await intent.save();
-
-        const updatedLoan = await Loan.findById(loan._id).lean();
-        await invalidateLoanCache(loan._id.toString());
-
-        return res.status(200).json({ success: true, message: 'Credit added', loan: require('../utils/loanSerializer').serializeLoan(updatedLoan) });
-    } catch (err) {
-        console.error('[addCredit] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
-    }
-};
-
-// --- recordInterest -----------------------------------------------------------
-// @desc    Manually trigger interest accrual for a loan
-// @route   POST /api/loans/:id/record-interest
-// @access  Private (Lender)
-exports.recordInterest = async (req, res) => {
-    try {
-        const Loan = require('../models/Loan');
-        const FinancialLedgerService = require('../services/FinancialLedgerService');
-        const { invalidateLoanCache } = require('../utils/cacheUtils');
-
-        const loan = await Loan.findById(req.params.id);
-        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can accrue interest' });
-        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
-
-        await FinancialLedgerService.accrueInterest(loan, new Date());
-
-        const updatedLoan = await Loan.findById(loan._id).lean();
-        await invalidateLoanCache(loan._id.toString());
-
-        return res.status(200).json({ success: true, message: 'Interest accrued', loan: require('../utils/loanSerializer').serializeLoan(updatedLoan) });
-    } catch (err) {
-        console.error('[recordInterest] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
-    }
-};
