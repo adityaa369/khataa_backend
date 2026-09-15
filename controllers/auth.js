@@ -635,7 +635,6 @@ exports.verifyMpin = async (req, res) => {
     try {
         const user = await User.findOne({ phone });
         if (!user) {
-            // Anti-enumeration
             return res.status(401).json({ success: false, message: 'Invalid MPIN' });
         }
 
@@ -645,53 +644,33 @@ exports.verifyMpin = async (req, res) => {
         }
 
         const redisClient = getRedisClient();
+        if (!redisClient) {
+            console.error('[Auth] verifyMpin: Redis rate limiting is unavailable. Failing closed.');
+            return res.status(500).json({ success: false, message: 'Authentication service unavailable' });
+        }
+
         const rateLimitKey = `mpin_attempts:${user._id}`;
         
         let attempts = 0;
-        if (redisClient) {
-            const currentAttempts = await redisClient.get(rateLimitKey);
-            if (currentAttempts && parseInt(currentAttempts) >= 5) {
-                return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
-            }
-        } else {
-            if (mpinCred.lockoutUntil && mpinCred.lockoutUntil > new Date()) {
-                return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
-            }
+        const currentAttempts = await redisClient.get(rateLimitKey);
+        if (currentAttempts && parseInt(currentAttempts) >= 5) {
+            return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
         }
 
         const isMatch = await bcrypt.compare(mpin, mpinCred.mpinHash);
 
         if (!isMatch) {
-            if (redisClient) {
-                attempts = await redisClient.incr(rateLimitKey);
-                if (attempts === 1) {
-                    await redisClient.expire(rateLimitKey, 15 * 60);
-                }
-                if (attempts >= 5) {
-                    return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
-                }
-            } else {
-                const updatedCred = await MPinCredential.findOneAndUpdate(
-                    { _id: mpinCred._id },
-                    { $inc: { failedAttempts: 1 } },
-                    { new: true }
-                );
-                if (updatedCred.failedAttempts >= 5) {
-                    await MPinCredential.findByIdAndUpdate(mpinCred._id, {
-                        lockoutUntil: new Date(Date.now() + 15 * 60 * 1000),
-                        failedAttempts: 0
-                    });
-                    return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
-                }
+            attempts = await redisClient.incr(rateLimitKey);
+            if (attempts === 1) {
+                await redisClient.expire(rateLimitKey, 15 * 60);
+            }
+            if (attempts >= 5) {
+                return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
             }
             return res.status(401).json({ success: false, message: 'Invalid MPIN' });
         }
 
-        if (redisClient) {
-            await redisClient.del(rateLimitKey);
-        } else {
-            await MPinCredential.findByIdAndUpdate(mpinCred._id, { failedAttempts: 0, lockoutUntil: null });
-        }
+        await redisClient.del(rateLimitKey);
 
         const admin = require('firebase-admin');
         const customToken = await admin.auth().createCustomToken(mpinCred.firebaseUid);
