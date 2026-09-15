@@ -34,6 +34,7 @@ exports.verifyOtp = async (req, res) => {
 
         const registrationDetails = req.body.registrationDetails;
         let updates = {};
+        updates.firebaseUid = result.uid;
         if (registrationDetails) {
             const allowedFields = ['firstName', 'lastName', 'email', 'city', 'address', 'pan', 'aadhar', 'dob', 'gender'];
             allowedFields.forEach(field => {
@@ -270,6 +271,7 @@ exports.verifyOtpMsg91 = async (req, res) => {
         let user = await User.findOne({ phone: phoneStr });
 
         let updates = {};
+        updates.firebaseUid = 'mock_uid_' + phoneStr;
         if (registrationDetails) {
             const allowedFields = ['firstName', 'lastName', 'email', 'city', 'address', 'pan', 'aadhar', 'dob', 'gender'];
             allowedFields.forEach(field => {
@@ -463,6 +465,7 @@ exports.verifyOtpMsg91 = async (req, res) => {
         let user = await User.findOne({ phone: phoneStr });
 
         let updates = {};
+        updates.firebaseUid = 'mock_uid_' + phoneStr;
         if (registrationDetails) {
             const allowedFields = ['firstName', 'lastName', 'email', 'city', 'address', 'pan', 'aadhar', 'dob', 'gender'];
             allowedFields.forEach(field => {
@@ -603,7 +606,7 @@ exports.setupMpin = async (req, res) => {
             { userId: req.user.id },
             { 
                 userId: req.user.id,
-                firebaseUid: req.user.firebaseUid,
+                firebaseUid: req.user.firebaseUid || ('mock_uid_' + req.user.phone),
                 mpinHash: hash,
                 failedAttempts: 0,
                 lockoutUntil: null
@@ -675,7 +678,12 @@ exports.verifyMpin = async (req, res) => {
         const admin = require('firebase-admin');
         const customToken = await admin.auth().createCustomToken(mpinCred.firebaseUid);
 
-        res.status(200).json({ success: true, customToken });
+        const jwt = require('jsonwebtoken');
+        const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+            expiresIn: '30d'
+        });
+
+        res.status(200).json({ success: true, customToken, token });
     } catch (err) {
         console.error('[Auth] verifyMpin error:', err.message);
         res.status(500).json({ success: false, message: 'Server error' });
