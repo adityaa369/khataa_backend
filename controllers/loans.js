@@ -193,7 +193,7 @@ exports.createLoan = async (req, res) => {
             durationMonths,
             durationType,
             loanType,
-            status: 'pending_approval',
+            status: 'pending_otp',
             transaction_id: effectiveTransactionId,
             documentUrl,
             documentId
@@ -241,7 +241,7 @@ exports.getGivenLoans = async (req, res) => {
         const cached = await cacheGet(cacheKey);
         if (cached) return res.status(200).json(cached);
 
-        const loans = await Loan.find({ lender: req.user.id });
+        const loans = await Loan.find({ lender: req.user.id, status: { $ne: 'pending_otp' } });
         const loansMapped = [];
         const User = require('../models/User'); // Import User model
         for (const loan of loans) {
@@ -320,7 +320,8 @@ exports.getTakenLoans = async (req, res) => {
                 { borrowerPhone: phone },
                 { borrower: req.user.id }
             ],
-            lender: { $ne: req.user.id } // Explicitly exclude loans where I am the lender
+            lender: { $ne: req.user.id }, // Explicitly exclude loans where I am the lender
+            status: { $ne: 'pending_otp' }
         });
 
         // Populate lender details manually to avoid changing the Mongoose schema
@@ -585,7 +586,7 @@ exports.updateProgress = async (req, res) => {
 // @access  Private (Lender)
 exports.verifyLenderOtp = async (req, res) => {
     try {
-        const { otp, verificationId } = req.body;
+        const { idToken, otp, verificationId } = req.body;
         const loan = await Loan.findById(req.params.id);
 
         if (!loan) {
@@ -600,16 +601,24 @@ exports.verifyLenderOtp = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is not in OTP pending state' });
         }
 
-        if (!verificationId) {
-            return res.status(400).json({ success: false, message: 'verificationId is required' });
-        }
+        let returnedPhone;
 
-        const verificationResult = await verifyFirebaseOtp(verificationId, otp);
-        if (!verificationResult.success) {
-            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
+        if (idToken) {
+            const { verifyFirebaseToken } = require('../utils/otpProvider');
+            const verificationResult = await verifyFirebaseToken(idToken);
+            if (!verificationResult.success) {
+                return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid ID Token' });
+            }
+            returnedPhone = verificationResult.mobile.replace(/\D/g, '').slice(-10);
+        } else if (verificationId && otp) {
+            const verificationResult = await verifyFirebaseOtp(verificationId, otp);
+            if (!verificationResult.success) {
+                return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
+            }
+            returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
+        } else {
+            return res.status(400).json({ success: false, message: 'idToken or verificationId is required' });
         }
-
-        const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
         const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
         if (returnedPhone !== loanPhone) {
             return res.status(400).json({
