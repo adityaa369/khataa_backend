@@ -51,12 +51,11 @@ exports.verifyOtp = async (req, res) => {
         let user = await User.findOneAndUpdate(
             { phone: phoneStr },
             { 
-                $setOnInsert: { 
+                $setOnInsert: {  
                     id: crypto.randomUUID(), 
                     phone: phoneStr, 
                     isVerified: true 
-                },
-                $set: updates 
+                , ...updates } 
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
