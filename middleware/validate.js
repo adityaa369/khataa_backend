@@ -32,9 +32,9 @@ const validateRegister = [
 
 // Loan create validation
 const validateCreateLoan = [
-    body('amount')
+    body('amountPaise')
         .notEmpty().withMessage('Amount is required')
-        .isFloat({ min: 1 }).withMessage('Amount must be greater than 0'),
+        .isInt({ min: 100 }).withMessage('Amount must be greater than 0'),
     body('borrower_phone')
         .notEmpty().withMessage('Borrower phone is required')
         .matches(/^(\+91)?[6-9]\d{9}$/).withMessage('Enter a valid Indian phone number'),

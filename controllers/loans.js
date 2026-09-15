@@ -60,7 +60,7 @@ exports.createLoan = async (req, res) => {
             borrower_name,
             borrower_aadhar,
             borrower_address,
-            amount,
+            amountPaise,
             interest_rate,
             duration_months,
             duration_type,
@@ -122,7 +122,7 @@ exports.createLoan = async (req, res) => {
         const duplicateLoan = await Loan.findOne({
             lender: req.user.id,
             borrowerPhone: borrowerPhone,
-            amount: amount,
+            amountPaise: amountPaise,
             createdAt: { $gte: twoMinsAgo }
         });
 
@@ -141,8 +141,8 @@ exports.createLoan = async (req, res) => {
             borrowerPhone,
             borrowerAadhar,
             borrowerAddress,
-            amount,
-            amountPaise: parseRupeesToPaise(amount),
+            amount: amountPaise / 100,
+            amountPaise: amountPaise,
             interestRate,
             durationMonths,
             durationType,
