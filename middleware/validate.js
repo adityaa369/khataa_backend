@@ -32,9 +32,15 @@ const validateRegister = [
 
 // Loan create validation
 const validateCreateLoan = [
+    // Accept either amountPaise (paise integer from Flutter) or amount (rupees float from older clients)
     body('amountPaise')
+        .if(body('amount').not().exists())
         .notEmpty().withMessage('Amount is required')
-        .isInt({ min: 100 }).withMessage('Amount must be greater than 0'),
+        .isInt({ min: 1 }).withMessage('Amount must be greater than 0'),
+    body('amount')
+        .if(body('amountPaise').not().exists())
+        .notEmpty().withMessage('Amount is required')
+        .isFloat({ min: 1 }).withMessage('Amount must be greater than 0'),
     body('borrower_phone')
         .notEmpty().withMessage('Borrower phone is required')
         .matches(/^(\+91)?[6-9]\d{9}$/).withMessage('Enter a valid Indian phone number'),

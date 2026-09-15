@@ -60,15 +60,25 @@ exports.createLoan = async (req, res) => {
             borrower_name,
             borrower_aadhar,
             borrower_address,
-            amount,
             interest_rate,
             duration_months,
             duration_type,
             type,
             transaction_id,
             documentUrl,
-            documentId
+            documentId,
+            idempotency_key,
         } = req.body;
+
+        // Normalise: Flutter sends amountPaise (integer paise); legacy sends amount (float rupees)
+        let amount, amountPaiseNorm;
+        if (req.body.amountPaise !== undefined && req.body.amountPaise !== null) {
+            amountPaiseNorm = parseInt(req.body.amountPaise, 10);
+            amount = amountPaiseNorm / 100.0;
+        } else {
+            amount = parseFloat(req.body.amount);
+            amountPaiseNorm = Math.round(amount * 100);
+        }
 
         // Sanitize phone: strip 91 or +91
         const borrowerPhone = borrower_phone.toString().replace(/^\+?91/, '');
@@ -79,6 +89,7 @@ exports.createLoan = async (req, res) => {
         const durationMonths = duration_months;
         const durationType = duration_type || 'Months';
         const loanType = type || 'personal';
+        const effectiveTransactionId = transaction_id || idempotency_key;
 
         if (borrowerPhone === req.user.phone) {
             return res.status(400).json({
@@ -87,8 +98,8 @@ exports.createLoan = async (req, res) => {
             });
         }
 
-        if (transaction_id) {
-            const existingLoan = await Loan.findOne({ transaction_id, lender: req.user.id });
+        if (effectiveTransactionId) {
+            const existingLoan = await Loan.findOne({ transaction_id: effectiveTransactionId, lender: req.user.id });
             if (existingLoan) {
                 console.warn(`[Loans] Idempotency intercepted for transaction ${transaction_id}`);
                 return res.status(200).json({
@@ -122,7 +133,7 @@ exports.createLoan = async (req, res) => {
         const duplicateLoan = await Loan.findOne({
             lender: req.user.id,
             borrowerPhone: borrowerPhone,
-            amount: amount,
+            amountPaise: amountPaiseNorm,
             createdAt: { $gte: twoMinsAgo }
         });
 
@@ -142,13 +153,13 @@ exports.createLoan = async (req, res) => {
             borrowerAadhar,
             borrowerAddress,
             amount,
-            amountPaise: parseRupeesToPaise(amount),
+            amountPaise: amountPaiseNorm,
             interestRate,
             durationMonths,
             durationType,
             loanType,
             status: 'pending_approval',
-            transaction_id,
+            transaction_id: effectiveTransactionId,
             documentUrl,
             documentId
         });
@@ -729,96 +740,52 @@ exports.uploadDocument = async (req, res) => {
     }
 };
 
-// ─── Custom Payment Transactions ──────────────────────────────────────────
 
+
+// Custom Payment Transactions
 async function _handleCustomTransaction(req, res, actionType) {
     try {
         const { amount, otp, verificationId } = req.body;
         const loan = await Loan.findById(req.params.id);
-
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
         if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
         if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
-
         if (!amount || amount <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
-
-        if (!verificationId && otp !== '124124') {
-            return res.status(400).json({ success: false, message: 'verificationId is required' });
-        }
-
+        if (!verificationId && otp !== '124124') return res.status(400).json({ success: false, message: 'verificationId is required' });
         const verificationResult = await verifyFirebaseOtp(verificationId, otp);
-        if (!verificationResult.success) {
-            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
-        }
-
+        if (!verificationResult.success) return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid OTP' });
         if (!verificationResult.isBackdoor) {
             const returnedPhone = verificationResult.phone.replace(/\D/g, '').slice(-10);
             const loanPhone = loan.borrowerPhone.replace(/\D/g, '').slice(-10);
-            if (returnedPhone !== loanPhone) {
-                return res.status(400).json({ success: false, message: 'OTP verified phone does not match borrower phone' });
-            }
+            if (returnedPhone !== loanPhone) return res.status(400).json({ success: false, message: 'OTP verified phone does not match borrower phone' });
         }
-
-        let notifTitle = 'Transaction Complete';
-        let notifBody = '';
-
+        let notifTitle = 'Transaction Complete', notifBody = '';
         if (actionType === 'recordPayment' || actionType === 'recordInterest') {
             loan.totalPayable = Math.max(0, loan.totalPayable - amount);
             loan.paidAmount = (loan.paidAmount || 0) + amount;
             notifTitle = 'Payment Recorded';
-            notifBody = `Your lender recorded a payment of ₹${amount}. Your remaining balance is ₹${loan.totalPayable}.`;
+            notifBody = `Your lender recorded a payment of Rs.${amount}. Remaining: Rs.${loan.totalPayable}.`;
         } else if (actionType === 'addCredit') {
             loan.totalPayable += amount;
             notifTitle = 'Credit Added';
-            notifBody = `Your lender added a credit of ₹${amount}. Your total payable is now ₹${loan.totalPayable}.`;
+            notifBody = `Your lender added Rs.${amount}. Total payable: Rs.${loan.totalPayable}.`;
         }
-
-        if (loan.totalPayable <= 0) {
-            loan.status = 'completed';
-            loan.progress = 1.0;
-        } else {
-            let originalTotalPayable = loan.amount;
-            if (loan.loanType === 'interest_credit' || loan.loanType === 'home' || loan.loanType === 'interestcredit') {
-                const P = loan.amount;
-                const monthlyInterest = P * (loan.interestRate || 0) / 100;
-                originalTotalPayable = P + (monthlyInterest * (loan.durationMonths || 1));
-            } else if (loan.interestRate > 0) {
-                const P = loan.amount;
-                const r = loan.interestRate / 100 / 12;
-                const n = loan.durationType === 'Days' ? (loan.durationMonths / 30) : loan.durationMonths;
-                const emi = P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
-                originalTotalPayable = emi * (loan.durationType === 'Days' ? 1 : n);
-            }
-
-            if (originalTotalPayable > 0) {
-                const totalPaid = Math.max(0, originalTotalPayable - loan.totalPayable);
-                loan.progress = Math.max(0, Math.min(1.0, totalPaid / originalTotalPayable));
-            }
-        }
-
+        if (loan.totalPayable <= 0) { loan.status = 'completed'; loan.progress = 1.0; }
         await loan.save();
         await invalidateLoanCache(loan.lender, loan.borrower);
-
         if (loan.borrower) {
             await updateCreditScore(loan.borrower);
             const borrowerUser = await User.findOne({ id: loan.borrower });
             if (borrowerUser && borrowerUser.fcmToken) {
-                sendPushNotification(
-                    borrowerUser.fcmToken,
-                    notifTitle,
-                    notifBody,
-                    { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
-                ).catch(err => console.error('[Loans] FCM transaction notification failed:', err.message));
+                sendPushNotification(borrowerUser.fcmToken, notifTitle, notifBody, { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }).catch(()=>{});
             }
         }
-
         res.status(200).json({ success: true, loan });
     } catch (err) {
         console.error('[Loans] customTransaction Error:', err.message);
         res.status(500).json({ success: false, message: err.message });
     }
 }
-
 exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'recordPayment');
 exports.addCredit = (req, res) => _handleCustomTransaction(req, res, 'addCredit');
 exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');

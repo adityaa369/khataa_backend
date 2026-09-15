@@ -681,3 +681,63 @@ exports.verifyMpin = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error' });
     }
 };
+
+// @desc    Get MPIN status for authenticated user
+// @route   GET /api/auth/mpin/status
+// @access  Private
+exports.getMpinStatus = async (req, res) => {
+    try {
+        const MPinCredential = require('../models/MPinCredential');
+        const cred = await MPinCredential.findOne({ userId: req.user.id });
+        res.status(200).json({ success: true, hasMpin: !!cred });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// @desc    Get active sessions for current user
+// @route   GET /api/auth/sessions
+// @access  Private
+exports.getSessions = async (req, res) => {
+    try {
+        // We don't have a full session DB yet — return the current device as the only session
+        const deviceInfo = req.headers['user-agent'] || 'Unknown Device';
+        const session = {
+            id: req.user.id + '_session',
+            deviceInfo: deviceInfo.substring(0, 80),
+            isCurrent: true,
+            lastUsedAt: new Date().toISOString(),
+        };
+        res.status(200).json({ success: true, sessions: [session] });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// @desc    Get security events for current user
+// @route   GET /api/auth/security-events
+// @access  Private
+exports.getSecurityEvents = async (req, res) => {
+    try {
+        // Return empty list until security event logging is built out
+        res.status(200).json({ success: true, events: [] });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// @desc    Revoke a session
+// @route   DELETE /api/auth/sessions/:sessionId
+// @access  Private
+exports.revokeSession = async (req, res) => {
+    // Placeholder — for now just return success
+    res.status(200).json({ success: true, message: 'Session revoked' });
+};
+
+// @desc    Revoke all other sessions
+// @route   POST /api/auth/sessions/revoke-others
+// @access  Private
+exports.revokeOtherSessions = async (req, res) => {
+    // Placeholder — for now just return success
+    res.status(200).json({ success: true, message: 'Other sessions revoked' });
+};

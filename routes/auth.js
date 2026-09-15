@@ -22,5 +22,11 @@ router.get('/verify-email/:token', authController.verifyEmail);
 
 router.post('/mpin/setup', protect, authController.setupMpin);
 router.post('/mpin/verify', authController.verifyMpin);
+router.get('/mpin/status', protect, authController.getMpinStatus);
+
+router.get('/sessions', protect, authController.getSessions);
+router.delete('/sessions/:sessionId', protect, authController.revokeSession);
+router.post('/sessions/revoke-others', protect, authController.revokeOtherSessions);
+router.get('/security-events', protect, authController.getSecurityEvents);
 
 module.exports = router;
