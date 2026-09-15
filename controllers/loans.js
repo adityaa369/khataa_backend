@@ -113,7 +113,6 @@ exports.createLoan = async (req, res) => {
         if (canonicalAmountPaise <= 0) {
             return res.status(400).json({ success: false, message: 'Amount must be greater than 0' });
         }
-        }
 
         // Sanitize phone: strip 91 or +91
         const borrowerPhone = borrower_phone.toString().replace(/^\+?91/, '');
