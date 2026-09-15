@@ -582,3 +582,86 @@ exports.verifyEmail = async (req, res) => {
         res.status(500).send('<h2>Something went wrong. Please try again.</h2>');
     }
 };
+
+
+// @desc    Set up MPIN for the authenticated user
+// @route   POST /api/auth/mpin/setup
+// @access  Private
+exports.setupMpin = async (req, res) => {
+    const { mpin } = req.body;
+    if (!mpin || mpin.length !== 6) {
+        return res.status(400).json({ success: false, message: 'Invalid MPIN' });
+    }
+    try {
+        const salt = await bcrypt.genSalt(12);
+        const hash = await bcrypt.hash(mpin, salt);
+        await User.findByIdAndUpdate(req.user.id, {
+            mpinHash: hash,
+            mpinFailedAttempts: 0,
+            mpinLockoutUntil: null
+        });
+        res.status(200).json({ success: true, message: 'MPIN setup successful' });
+    } catch (err) {
+        console.error('[Auth] setupMpin error:', err.message);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// @desc    Verify MPIN and return Custom Firebase Token
+// @route   POST /api/auth/mpin/verify
+// @access  Public
+exports.verifyMpin = async (req, res) => {
+    const { phone, mpin } = req.body;
+    if (!phone || !mpin) {
+        return res.status(400).json({ success: false, message: 'Phone and MPIN required' });
+    }
+
+    try {
+        // Find user by phone, explicitly select mpin fields since select is false
+        let user = await User.findOne({ phone }).select('+mpinHash +mpinFailedAttempts +mpinLockoutUntil +firebaseUid');
+        if (!user) {
+            return res.status(401).json({ success: false, message: 'User not found' });
+        }
+
+        if (!user.mpinHash) {
+            return res.status(400).json({ success: false, message: 'MPIN not setup for this account' });
+        }
+
+        // Check rate limiting
+        if (user.mpinLockoutUntil && user.mpinLockoutUntil > new Date()) {
+            return res.status(429).json({ success: false, message: 'Account locked. Try again later.' });
+        }
+
+        const isMatch = await bcrypt.compare(mpin, user.mpinHash);
+
+        if (!isMatch) {
+            let attempts = (user.mpinFailedAttempts || 0) + 1;
+            let updates = { mpinFailedAttempts: attempts };
+            if (attempts >= 5) {
+                // Lockout for 15 minutes
+                updates.mpinLockoutUntil = new Date(Date.now() + 15 * 60 * 1000);
+                updates.mpinFailedAttempts = 0; // Reset for after lockout
+            }
+            await User.findByIdAndUpdate(user._id, updates);
+            
+            if (attempts >= 5) {
+                return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
+            }
+            return res.status(401).json({ success: false, message: 'Invalid MPIN' });
+        }
+
+        // Success - reset attempts
+        if (user.mpinFailedAttempts > 0 || user.mpinLockoutUntil) {
+            await User.findByIdAndUpdate(user._id, { mpinFailedAttempts: 0, mpinLockoutUntil: null });
+        }
+
+        // Use firebase-admin to mint a custom token
+        const admin = require('firebase-admin');
+        const customToken = await admin.auth().createCustomToken(user.firebaseUid);
+
+        res.status(200).json({ success: true, customToken });
+    } catch (err) {
+        console.error('[Auth] verifyMpin error:', err.message);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};

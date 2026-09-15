@@ -20,4 +20,7 @@ router.post('/register', protect, validateRegister, authController.register);
 router.get('/me', protect, authController.getMe);
 router.get('/verify-email/:token', authController.verifyEmail);
 
+router.post('/mpin/setup', protect, authController.setupMpin);
+router.post('/mpin/verify', authController.verifyMpin);
+
 module.exports = router;
