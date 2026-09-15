@@ -115,6 +115,7 @@ exports.createLoan = async (req, res) => {
         }
 
         // Sanitize phone: strip 91 or +91
+        const amount = canonicalAmountPaise / 100;
         const borrowerPhone = borrower_phone.toString().replace(/^\+?91/, '');
         const borrowerName = borrower_name;
         const borrowerAadhar = borrower_aadhar;
@@ -409,7 +410,7 @@ exports.verifyLoan = async (req, res) => {
         loan.borrower = req.user.id; // Link the borrower's actual user ID
 
         const FinancialLedgerService = require('../services/FinancialLedgerService');
-        await FinancialLedgerService.activateLoan(loan, parseRupeesToPaise(loan.amount), req.user.id, loan.activatedAt);
+        await FinancialLedgerService.activateLoan(loan, loan.amountPaise, req.user.id, loan.activatedAt);
 
         // Calculate Dates
         if (loan.durationMonths && loan.durationMonths > 0) {

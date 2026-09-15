@@ -46,17 +46,7 @@ const globalLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 5, // 20 auth attempts per 15 min
-    message: { success: false, message: 'Too many authentication attempts, please wait.' },
-    standardHeaders: true,
-    legacyHeaders: false,
-    skipSuccessfulRequests: true,
-});
-
 app.use('/api', globalLimiter);
-app.use('/api/auth', authLimiter);
 
 // ─── Body Parsing ───────────────────────────────────────────────────────────
 app.use(compression());
