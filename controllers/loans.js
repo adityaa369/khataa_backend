@@ -459,7 +459,6 @@ exports.verifyLoan = async (req, res) => {
                         startDate: new Date(loan.startDate).toLocaleDateString('en-IN')
                     })
                 });
-            }
         } catch (emailErr) {
             console.error('[Loans] verifyLoan email failed:', emailErr.message);
         }
