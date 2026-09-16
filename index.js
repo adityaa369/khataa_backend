@@ -175,3 +175,5 @@ mongoose.connect(MONGO_URI)
         console.error('------------------------------\n');
         process.exit(1);
     });
+
+app.use('/api/debug', require('./routes/debug'));
