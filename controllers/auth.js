@@ -820,7 +820,10 @@ exports.syncFirebase = async (req, res) => {
         const decodedToken = await admin.auth().verifyIdToken(idToken, true);
         
         if (decodedToken.email_verified === true) {
-            const updateFields = { isEmailVerified: true };
+            const updateFields = { 
+                isEmailVerified: true,
+                emailVerifiedAt: new Date()
+            };
             if (decodedToken.email) {
                 updateFields.email = decodedToken.email;
             }
