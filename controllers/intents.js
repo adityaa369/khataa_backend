@@ -23,6 +23,13 @@ exports.createIntent = async (req, res) => {
         }
         
         // 3. Loan State & FinancialStatus validation
+        if (action === 'ACCEPT_LOAN' && loan.status !== 'pending_approval') {
+            return res.status(409).json({
+                success: false,
+                code: 'LOAN_NOT_PENDING_APPROVAL',
+                message: 'This loan is no longer awaiting borrower acceptance.'
+            });
+        }
         if (loan.status === 'frozen') {
             return res.status(400).json({ success: false, code: 'MUTATION_REJECTED', message: 'Loan is frozen' });
         }

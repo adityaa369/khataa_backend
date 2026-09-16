@@ -90,6 +90,7 @@ app.use((req, res, next) => {
 // ─── Routes ─────────────────────────────────────────────────────────────────
 const authRoutes = require('./routes/auth');
 const loanRoutes = require('./routes/loans');
+const intentRoutes = require('./routes/intents');
 const creditScoreRoutes = require('./routes/creditScore');
 const userRoutes = require('./routes/users');
 const notificationRoutes = require('./routes/notifications');
@@ -99,6 +100,7 @@ const adminRoutes = require('./routes/admin');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/loans', loanRoutes);
+app.use('/api/intents', intentRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/credit-score', creditScoreRoutes);
 app.use('/api/users', userRoutes);
