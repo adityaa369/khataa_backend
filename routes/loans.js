@@ -28,6 +28,7 @@ router.get('/given', cacheMiddleware('given_loans', 300), getGivenLoans);
 router.get('/taken', cacheMiddleware('taken_loans', 300), getTakenLoans);
 router.get('/:id', getLoanById);
 router.get('/:id/interest-schedule', require('../controllers/loans').getInterestSchedule);
+router.get('/:id/debug-schedule', require('../controllers/loans').getInterestScheduleDebug);
 router.post('/upload-document', uploadDocument);
 router.post('/:id/verify', verifyLoan);
 router.post('/:id/verify-lender-otp', verifyLenderOtp);
