@@ -885,6 +885,7 @@ exports.getInterestSchedule = async (req, res) => {
         }
 
         const FinancialLedgerService = require('../services/FinancialLedgerService');
+        await FinancialLedgerService.accrueInterest(loan, new Date());
         FinancialLedgerService.deriveBalances(loan);
 
         const startDate = loan.activatedAt || loan.startDate || loan.createdAt;
