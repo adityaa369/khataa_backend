@@ -130,16 +130,9 @@ exports.register = async (req, res) => {
 // @access  Private
 exports.getMe = async (req, res) => {
     try {
-        let user = await User.findOne({ id: req.user.id });
+        const user = await User.findOne({ id: req.user.id });
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
-        }
-        if (req.query.forceVerify === 'true') {
-            user = await User.findOneAndUpdate(
-                { id: req.user.id },
-                { isEmailVerified: true },
-                { new: true }
-            );
         }
         res.status(200).json({
             success: true,
