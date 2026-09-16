@@ -602,12 +602,12 @@ exports.setupMpin = async (req, res) => {
         const salt = await bcrypt.genSalt(12);
         const hash = await bcrypt.hash(mpin, salt);
         
-        const existingMpin = await MPinCredential.findOne({ userId: req.user.id });
+        const existingMpin = await MPinCredential.findOne({ userId: req.user._id });
         if (existingMpin) {
             return res.status(400).json({ success: false, message: "MPIN already exists. Please use the Change MPIN flow." });
         }
         await MPinCredential.create({
-            userId: req.user.id,
+            userId: req.user._id,
             firebaseUid: req.user.firebaseUid || ("mock_uid_" + req.user.phone),
             mpinHash: hash,
             failedAttempts: 0,
@@ -696,7 +696,7 @@ exports.verifyMpin = async (req, res) => {
 exports.getMpinStatus = async (req, res) => {
     try {
         const MPinCredential = require('../models/MPinCredential');
-        const cred = await MPinCredential.findOne({ userId: req.user.id });
+        const cred = await MPinCredential.findOne({ userId: req.user._id });
         res.status(200).json({ success: true, hasMpin: !!cred });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Server error' });
@@ -758,7 +758,7 @@ exports.changeMpin = async (req, res) => {
         return res.status(400).json({ success: false, message: "Invalid MPIN" });
     }
     try {
-        const existingMpin = await MPinCredential.findOne({ userId: req.user.id });
+        const existingMpin = await MPinCredential.findOne({ userId: req.user._id });
         if (!existingMpin) {
             return res.status(400).json({ success: false, message: "No MPIN found. Please use the Setup MPIN flow." });
         }
