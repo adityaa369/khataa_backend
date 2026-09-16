@@ -626,6 +626,27 @@ exports.setupMpin = async (req, res) => {
     }
 };
 
+exports.getFirebaseCustomToken = async (req, res) => {
+    try {
+        const admin = require('firebase-admin');
+        const phoneStr = req.user.phone.startsWith('+91') ? req.user.phone : `+91${req.user.phone}`;
+        let firebaseUser;
+        try {
+            firebaseUser = await admin.auth().getUserByPhoneNumber(phoneStr);
+        } catch (e) {
+            if (e.code === 'auth/user-not-found') {
+                return res.status(404).json({ success: false, message: 'Firebase user not found' });
+            }
+            throw e;
+        }
+        const customToken = await admin.auth().createCustomToken(firebaseUser.uid);
+        res.status(200).json({ success: true, customToken });
+    } catch (err) {
+        console.error('[Auth] getFirebaseCustomToken Error:', err.message);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 // @desc    Verify MPIN and return Custom Firebase Token
 // @route   POST /api/auth/mpin/verify
 // @access  Public
@@ -790,13 +811,7 @@ exports.changeMpin = async (req, res) => {
 exports.syncFirebase = async (req, res) => {
     try {
         const admin = require("firebase-admin");
-        let idToken;
-        
-        if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
-            idToken = req.headers.authorization.split(" ")[1];
-        } else if (req.body.idToken) {
-            idToken = req.body.idToken;
-        }
+        const idToken = req.body.idToken;
 
         if (!idToken) {
             return res.status(401).json({ success: false, message: "Firebase ID token is required" });
