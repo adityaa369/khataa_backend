@@ -316,10 +316,7 @@ exports.getTakenLoans = async (req, res) => {
         // Sanitize phone for query consistency
         const phone = req.user.phone.toString().replace(/^\+?91/, '');
         const loans = await Loan.find({
-            $or: [
-                { borrowerPhone: phone },
-                { borrower: req.user.id }
-            ],
+            borrower: req.user.id,
             lender: { $ne: req.user.id }, // Explicitly exclude loans where I am the lender
             status: { $ne: 'pending_otp' }
         });
