@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const TransactionIntent = require('../models/TransactionIntent');
 const Loan = require('../models/Loan');
 
@@ -33,6 +34,7 @@ exports.createIntent = async (req, res) => {
         const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins expiry
         
         const intent = await TransactionIntent.create({
+            intentId: crypto.randomUUID(),
             loanId,
             userId: req.user.id,
             action,
