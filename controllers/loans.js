@@ -388,7 +388,7 @@ exports.verifyLoan = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is not ready for approval or already active.' });
         }
 
-        const isBorrower = String(loan.borrowerPhone).replace(/\D/g, '').slice(-10) === String(req.user.phone).replace(/\D/g, '').slice(-10);
+        const isBorrower = loan.borrower === req.user.id;
         if (!isBorrower) return res.status(403).json({ success: false, message: 'Only the designated borrower can approve this loan.' });
 
         if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required for financial authorization' });
