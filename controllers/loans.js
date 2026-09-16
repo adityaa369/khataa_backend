@@ -295,7 +295,7 @@ exports.getGivenLoans = async (req, res) => {
 // @access  Private
 exports.getLoanById = async (req, res) => {
     try {
-        const loan = await Loan.findById(req.params.id).lean();
+        const loan = await Loan.findById(req.params.id);
         if (!loan) return res.status(404).json({ success: false, message: "Loan not found" });
         
         if (loan.lender !== req.user.id && loan.borrower !== req.user.id) {
@@ -305,10 +305,23 @@ exports.getLoanById = async (req, res) => {
         const lenderUser = await User.findOne({ id: loan.lender });
         const borrowerUser = await User.findOne({ id: loan.borrower });
 
-        loan.lender = lenderUser ? { id: lenderUser.id, firstName: lenderUser.firstName, lastName: lenderUser.lastName, phone: lenderUser.phone } : { id: loan.lender, firstName: "Unknown", lastName: "Lender" };
-        loan.borrower = borrowerUser ? { id: borrowerUser.id, firstName: borrowerUser.firstName, lastName: borrowerUser.lastName, phone: borrowerUser.phone } : { id: loan.borrower, firstName: "Unknown", lastName: "Borrower" };
+        const { loanSerializer } = require("../utils/loanSerializer");
+        const loanObj = loanSerializer(loan);
 
-        res.status(200).json({ success: true, loan });
+        if (lenderUser) {
+            loanObj.lenderName = `${lenderUser.firstName || ""} ${lenderUser.lastName || ""}`.trim() || "Unknown Lender";
+            loanObj.lenderPhone = lenderUser.phone;
+        } else {
+            loanObj.lenderName = "Unknown Lender";
+            loanObj.lenderPhone = "";
+        }
+
+        if (borrowerUser) {
+            loanObj.borrowerName = `${borrowerUser.firstName || ""} ${borrowerUser.lastName || ""}`.trim() || loan.borrowerName || "Unknown Borrower";
+            loanObj.borrowerPhone = borrowerUser.phone;
+        }
+
+        res.status(200).json({ success: true, loan: loanObj });
     } catch (err) {
         console.error("[Loans] getLoanById Error:", err.message);
         res.status(500).json({ success: false, message: "Server Error" });

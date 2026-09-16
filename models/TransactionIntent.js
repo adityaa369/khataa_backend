@@ -13,11 +13,11 @@ const TransactionIntentSchema = new mongoose.Schema({
     action: {
         type: String,
         required: true,
-        enum: ['CLOSE_LOAN', 'PAYMENT', 'ADD_CREDIT']
+        enum: ['CLOSE_LOAN', 'PAYMENT', 'ADD_CREDIT', 'ACCEPT_LOAN']
     },
     status: {
         type: String,
-        enum: ['PENDING', 'COMMITTED', 'REJECTED'],
+        enum: ['PENDING', 'COMMITTED', 'COMPLETED', 'REJECTED'],
         default: 'PENDING'
     },
     userId: {
