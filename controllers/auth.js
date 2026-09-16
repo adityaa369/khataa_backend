@@ -820,9 +820,14 @@ exports.syncFirebase = async (req, res) => {
         const decodedToken = await admin.auth().verifyIdToken(idToken, true);
         
         if (decodedToken.email_verified === true) {
+            const updateFields = { isEmailVerified: true };
+            if (decodedToken.email) {
+                updateFields.email = decodedToken.email;
+            }
+            
             const user = await User.findOneAndUpdate(
                 { id: req.user.id },
-                { isEmailVerified: true },
+                updateFields,
                 { new: true, runValidators: true }
             );
             return res.status(200).json({ success: true, user });
