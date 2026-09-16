@@ -602,17 +602,17 @@ exports.setupMpin = async (req, res) => {
         const salt = await bcrypt.genSalt(12);
         const hash = await bcrypt.hash(mpin, salt);
         
-        await MPinCredential.findOneAndUpdate(
-            { userId: req.user.id },
-            { 
-                userId: req.user.id,
-                firebaseUid: req.user.firebaseUid || ('mock_uid_' + req.user.phone),
-                mpinHash: hash,
-                failedAttempts: 0,
-                lockoutUntil: null
-            },
-            { upsert: true, new: true }
-        );
+        const existingMpin = await MPinCredential.findOne({ userId: req.user.id });
+        if (existingMpin) {
+            return res.status(400).json({ success: false, message: "MPIN already exists. Please use the Change MPIN flow." });
+        }
+        await MPinCredential.create({
+            userId: req.user.id,
+            firebaseUid: req.user.firebaseUid || ("mock_uid_" + req.user.phone),
+            mpinHash: hash,
+            failedAttempts: 0,
+            lockoutUntil: null
+        });
 
         const redisClient = getRedisClient();
         if (redisClient) {
