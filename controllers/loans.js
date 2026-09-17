@@ -448,6 +448,7 @@ exports.verifyLoan = async (req, res) => {
         await loan.save();
 
         try {
+            if (req.user.email) {
                 const lenderUser = await User.findOne({ id: loan.lender });
                 await sendEmail({
                     to: req.user.email,
