@@ -112,6 +112,53 @@ app.use('/api/admin', adminRoutes);
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 app.get('/api/version', (req, res) => res.json({ success: true, commit: process.env.RENDER_GIT_COMMIT || 'unknown' }));
 
+const { protect } = require('./middleware/auth');
+const adminOnly = require('./middleware/adminOnly');
+app.get('/api/audit', protect, adminOnly, async (req, res) => {
+    try {
+        const Loan = require('./models/Loan');
+        const loans = ['6aaa8b83fee00a8bb0ace708', '6aaa9f354a72eec9ea0f8c62'];
+        let output = '';
+        for (const id of loans) {
+            output += '--------------------------------------------------\n';
+            output += 'LOAN ID: ' + id + '\n';
+            const loan = await Loan.findById(id).lean();
+            if (!loan) {
+                output += 'Not found\n';
+                continue;
+            }
+            output += 'Original Principal (Paise): ' + (loan.amountPaise || loan.amount) + '\n';
+            output += 'Transactions:\n';
+            let runningPrincipal = loan.amountPaise || (loan.amount * 100) || 0;
+            let runningInterest = 0;
+            let runningFees = 0;
+            const sorted = loan.transactions.sort((a,b) => new Date(a.effectiveAt || a.recordedAt) - new Date(b.effectiveAt || b.recordedAt));
+            for (const t of sorted) {
+                output += '  Date: ' + t.recordedAt + '\n';
+                output += '  ID: ' + t._id + '\n';
+                output += '  Type: ' + t.type + '\n';
+                output += '  Amount (Paise): ' + t.amountPaise + '\n';
+                output += '  Principal Delta: ' + (t.principalAllocationPaise || 0) + '\n';
+                output += '  Interest Delta: ' + (t.interestAllocationPaise || 0) + '\n';
+                output += '  Fee Delta: ' + (t.feesAllocationPaise || 0) + '\n';
+                output += '  Intent/Idempotency Key: ' + (t.intentId || 'N/A') + '\n';
+                if (t.type === 'interest_accrued') {
+                    runningInterest += t.amountPaise || 0;
+                } else if (t.type === 'payment' || t.type === 'interest_payment') {
+                    runningPrincipal -= (t.principalAllocationPaise || 0);
+                    runningInterest -= (t.interestAllocationPaise || 0);
+                    runningFees -= (t.feesAllocationPaise || 0);
+                }
+                output += '  -> Running Balance: Principal: ' + runningPrincipal + ' Interest: ' + runningInterest + ' Fees: ' + runningFees + '\n';
+                output += '  --\n';
+            }
+        }
+        res.type('text/plain').send(output);
+    } catch(err) {
+        res.status(500).send(err.message);
+    }
+});
+
 app.get('/api/diagnostic', async (req, res) => {
     const envValue = process.env.FINANCIAL_KILL_SWITCH;
     let mongoKs = null;
