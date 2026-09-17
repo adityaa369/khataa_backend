@@ -90,7 +90,6 @@ app.use((req, res, next) => {
 // ─── Routes ─────────────────────────────────────────────────────────────────
 const authRoutes = require('./routes/auth');
 const loanRoutes = require('./routes/loans');
-const intentRoutes = require('./routes/intents');
 const creditScoreRoutes = require('./routes/creditScore');
 const userRoutes = require('./routes/users');
 const notificationRoutes = require('./routes/notifications');
@@ -100,7 +99,6 @@ const adminRoutes = require('./routes/admin');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/loans', loanRoutes);
-app.use('/api/intents', intentRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/credit-score', creditScoreRoutes);
 app.use('/api/users', userRoutes);
@@ -110,82 +108,6 @@ app.use('/api/admin', adminRoutes);
 
 // ─── Health Check ───────────────────────────────────────────────────────────
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
-app.get('/api/version', (req, res) => res.json({ success: true, commit: process.env.RENDER_GIT_COMMIT || 'unknown' }));
-
-const { protect } = require('./middleware/auth');
-const adminOnly = require('./middleware/adminOnly');
-app.get('/api/audit', protect, adminOnly, async (req, res) => {
-    try {
-        const Loan = require('./models/Loan');
-        const loans = ['6aaa8b83fee00a8bb0ace708', '6aaa9f354a72eec9ea0f8c62'];
-        let output = '';
-        for (const id of loans) {
-            output += '--------------------------------------------------\n';
-            output += 'LOAN ID: ' + id + '\n';
-            const loan = await Loan.findById(id).lean();
-            if (!loan) {
-                output += 'Not found\n';
-                continue;
-            }
-            output += 'Original Principal (Paise): ' + (loan.amountPaise || loan.amount) + '\n';
-            output += 'Transactions:\n';
-            let runningPrincipal = loan.amountPaise || (loan.amount * 100) || 0;
-            let runningInterest = 0;
-            let runningFees = 0;
-            const sorted = loan.transactions.sort((a,b) => new Date(a.effectiveAt || a.recordedAt) - new Date(b.effectiveAt || b.recordedAt));
-            for (const t of sorted) {
-                output += '  Date: ' + t.recordedAt + '\n';
-                output += '  ID: ' + t._id + '\n';
-                output += '  Type: ' + t.type + '\n';
-                output += '  Amount (Paise): ' + t.amountPaise + '\n';
-                output += '  Principal Delta: ' + (t.principalAllocationPaise || 0) + '\n';
-                output += '  Interest Delta: ' + (t.interestAllocationPaise || 0) + '\n';
-                output += '  Fee Delta: ' + (t.feesAllocationPaise || 0) + '\n';
-                output += '  Intent/Idempotency Key: ' + (t.intentId || 'N/A') + '\n';
-                if (t.type === 'interest_accrued') {
-                    runningInterest += t.amountPaise || 0;
-                } else if (t.type === 'payment' || t.type === 'interest_payment') {
-                    runningPrincipal -= (t.principalAllocationPaise || 0);
-                    runningInterest -= (t.interestAllocationPaise || 0);
-                    runningFees -= (t.feesAllocationPaise || 0);
-                }
-                output += '  -> Running Balance: Principal: ' + runningPrincipal + ' Interest: ' + runningInterest + ' Fees: ' + runningFees + '\n';
-                output += '  --\n';
-            }
-        }
-        res.type('text/plain').send(output);
-    } catch(err) {
-        res.status(500).send(err.message);
-    }
-});
-
-app.get('/api/diagnostic', async (req, res) => {
-    const envValue = process.env.FINANCIAL_KILL_SWITCH;
-    let mongoKs = null;
-    try {
-        const mongoose = require('mongoose');
-        const FinancialKillSwitch = require('./models/FinancialKillSwitch');
-        mongoKs = await FinancialKillSwitch.findOne({ key: 'FINANCIAL' });
-    } catch(e) {}
-    
-    let activeSource = 'NONE (NORMAL)';
-    let currentState = 'false';
-    let reason = 'N/A';
-    let lastUpdated = 'N/A';
-
-    if (envValue === 'true') {
-        activeSource = 'RENDER ENVIRONMENT VARIABLE';
-        currentState = 'true';
-        reason = 'Emergency override via Render Dashboard';
-    } else if (mongoKs && mongoKs.enabled) {
-        activeSource = 'MONGODB';
-        currentState = 'true';
-        reason = mongoKs.reason || 'Unknown';
-        lastUpdated = mongoKs.updatedAt || 'Unknown';
-    }
-    
-    res.json({ SOURCE: activeSource, CURRENT_STATE: currentState, WHY_IT_IS_ACTIVE: reason, LAST_UPDATED: lastUpdated, SAFE_TO_RESTORE_NORMAL: 'YES' });
-});
 
 // ─── Dev-only DB Clear (NEVER in production) ────────────────────────────────
 if (process.env.NODE_ENV !== 'production') {
@@ -253,5 +175,3 @@ mongoose.connect(MONGO_URI)
         console.error('------------------------------\n');
         process.exit(1);
     });
-
-app.use('/api/debug', require('./routes/debug'));

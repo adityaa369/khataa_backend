@@ -602,17 +602,17 @@ exports.setupMpin = async (req, res) => {
         const salt = await bcrypt.genSalt(12);
         const hash = await bcrypt.hash(mpin, salt);
         
-        const existingMpin = await MPinCredential.findOne({ userId: req.user._id });
-        if (existingMpin) {
-            return res.status(400).json({ success: false, message: "MPIN already exists. Please use the Change MPIN flow." });
-        }
-        await MPinCredential.create({
-            userId: req.user._id,
-            firebaseUid: req.user.firebaseUid || ("mock_uid_" + req.user.phone),
-            mpinHash: hash,
-            failedAttempts: 0,
-            lockoutUntil: null
-        });
+        await MPinCredential.findOneAndUpdate(
+            { userId: req.user.id },
+            { 
+                userId: req.user.id,
+                firebaseUid: req.user.firebaseUid || ('mock_uid_' + req.user.phone),
+                mpinHash: hash,
+                failedAttempts: 0,
+                lockoutUntil: null
+            },
+            { upsert: true, new: true }
+        );
 
         const redisClient = getRedisClient();
         if (redisClient) {
@@ -623,27 +623,6 @@ exports.setupMpin = async (req, res) => {
     } catch (err) {
         console.error('[Auth] setupMpin error:', err.message);
         res.status(500).json({ success: false, message: 'Server error' });
-    }
-};
-
-exports.getFirebaseCustomToken = async (req, res) => {
-    try {
-        const admin = require('firebase-admin');
-        const phoneStr = req.user.phone.startsWith('+91') ? req.user.phone : `+91${req.user.phone}`;
-        let firebaseUser;
-        try {
-            firebaseUser = await admin.auth().getUserByPhoneNumber(phoneStr);
-        } catch (e) {
-            if (e.code === 'auth/user-not-found') {
-                return res.status(404).json({ success: false, message: 'Firebase user not found' });
-            }
-            throw e;
-        }
-        const customToken = await admin.auth().createCustomToken(firebaseUser.uid);
-        res.status(200).json({ success: true, customToken });
-    } catch (err) {
-        console.error('[Auth] getFirebaseCustomToken Error:', err.message);
-        res.status(500).json({ success: false, message: err.message });
     }
 };
 
@@ -717,7 +696,7 @@ exports.verifyMpin = async (req, res) => {
 exports.getMpinStatus = async (req, res) => {
     try {
         const MPinCredential = require('../models/MPinCredential');
-        const cred = await MPinCredential.findOne({ userId: req.user._id });
+        const cred = await MPinCredential.findOne({ userId: req.user.id });
         res.status(200).json({ success: true, hasMpin: !!cred });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Server error' });
@@ -769,76 +748,4 @@ exports.revokeSession = async (req, res) => {
 exports.revokeOtherSessions = async (req, res) => {
     // Placeholder — for now just return success
     res.status(200).json({ success: true, message: 'Other sessions revoked' });
-};
-// @desc    Change MPIN for the authenticated user
-// @route   POST /api/auth/mpin/change
-// @access  Private
-exports.changeMpin = async (req, res) => {
-    const { mpin } = req.body;
-    if (!mpin || mpin.length !== 6) {
-        return res.status(400).json({ success: false, message: "Invalid MPIN" });
-    }
-    try {
-        const existingMpin = await MPinCredential.findOne({ userId: req.user._id });
-        if (!existingMpin) {
-            return res.status(400).json({ success: false, message: "No MPIN found. Please use the Setup MPIN flow." });
-        }
-
-        const salt = await bcrypt.genSalt(12);
-        const hash = await bcrypt.hash(mpin, salt);
-        
-        existingMpin.mpinHash = hash;
-        existingMpin.failedAttempts = 0;
-        existingMpin.lockoutUntil = null;
-        await existingMpin.save();
-
-        const redisClient = getRedisClient();
-        if (redisClient) {
-            await redisClient.del(`mpin_attempts:${req.user.id}`);
-        }
-
-        res.status(200).json({ success: true, message: "MPIN changed successfully" });
-    } catch (err) {
-        console.error("[Auth] changeMpin error:", err.message);
-        res.status(500).json({ success: false, message: "Server error" });
-    }
-};
-
-
-// @desc    Sync Firebase Email Verification State
-// @route   POST /api/auth/sync-firebase
-// @access  Private
-exports.syncFirebase = async (req, res) => {
-    try {
-        const admin = require("firebase-admin");
-        const idToken = req.body.idToken;
-
-        if (!idToken) {
-            return res.status(401).json({ success: false, message: "Firebase ID token is required" });
-        }
-
-        const decodedToken = await admin.auth().verifyIdToken(idToken, true);
-        
-        if (decodedToken.email_verified === true) {
-            const updateFields = { 
-                isEmailVerified: true,
-                emailVerifiedAt: new Date()
-            };
-            if (decodedToken.email) {
-                updateFields.email = decodedToken.email;
-            }
-            
-            const user = await User.findOneAndUpdate(
-                { id: req.user.id },
-                updateFields,
-                { new: true, runValidators: true }
-            );
-            return res.status(200).json({ success: true, user });
-        } else {
-            return res.status(200).json({ success: false, message: "Email is not verified in Firebase", user: req.user });
-        }
-    } catch (err) {
-        console.error("[Auth] syncFirebase error:", err);
-        res.status(500).json({ success: false, message: err.message });
-    }
 };

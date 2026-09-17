@@ -57,20 +57,9 @@ const validateCreateLoan = [
 
 // Payment recording validation
 const validatePaymentAmount = [
-    body().custom((value, { req }) => {
-        if (req.body.amountPaise !== undefined) {
-            if (!Number.isInteger(req.body.amountPaise) || req.body.amountPaise <= 0) {
-                throw new Error('amountPaise must be a positive integer');
-            }
-        } else if (req.body.amount !== undefined) {
-            if (typeof req.body.amount !== 'number' || req.body.amount <= 0) {
-                throw new Error('Amount must be greater than 0');
-            }
-        } else {
-            throw new Error('Amount is required');
-        }
-        return true;
-    }),
+    body('amount')
+        .notEmpty().withMessage('Amount is required')
+        .isFloat({ min: 1 }).withMessage('Amount must be greater than 0'),
     handleValidationErrors
 ];
 

@@ -295,36 +295,15 @@ exports.getGivenLoans = async (req, res) => {
 // @access  Private
 exports.getLoanById = async (req, res) => {
     try {
-        const loan = await Loan.findById(req.params.id);
-        if (!loan) return res.status(404).json({ success: false, message: "Loan not found" });
-        
-        if (loan.lender !== req.user.id && loan.borrower !== req.user.id) {
-            return res.status(403).json({ success: false, message: "Not authorized" });
-        }
-
-        const lenderUser = await User.findOne({ id: loan.lender });
-        const borrowerUser = await User.findOne({ id: loan.borrower });
-
-        const { loanSerializer } = require("../utils/loanSerializer");
-        const loanObj = loanSerializer(loan);
-
-        if (lenderUser) {
-            loanObj.lenderName = `${lenderUser.firstName || ""} ${lenderUser.lastName || ""}`.trim() || "Unknown Lender";
-            loanObj.lenderPhone = lenderUser.phone;
-        } else {
-            loanObj.lenderName = "Unknown Lender";
-            loanObj.lenderPhone = "";
-        }
-
-        if (borrowerUser) {
-            loanObj.borrowerName = `${borrowerUser.firstName || ""} ${borrowerUser.lastName || ""}`.trim() || loan.borrowerName || "Unknown Borrower";
-            loanObj.borrowerPhone = borrowerUser.phone;
-        }
-
-        res.status(200).json({ success: true, loan: loanObj });
+        const loan = await Loan.findById(req.params.id)
+            .populate('lender', 'firstName lastName phone')
+            .populate('borrower', 'firstName lastName phone');
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender.id !== req.user.id && loan.borrower.id !== req.user.id) return res.status(403).json({ success: false, message: 'Not authorized' });
+        res.status(200).json({ success: true, loan });
     } catch (err) {
-        console.error("[Loans] getLoanById Error:", err.message);
-        res.status(500).json({ success: false, message: "Server Error" });
+        console.error('[Loans] getLoanById Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
 
@@ -337,7 +316,10 @@ exports.getTakenLoans = async (req, res) => {
         // Sanitize phone for query consistency
         const phone = req.user.phone.toString().replace(/^\+?91/, '');
         const loans = await Loan.find({
-            borrower: req.user.id,
+            $or: [
+                { borrowerPhone: phone },
+                { borrower: req.user.id }
+            ],
             lender: { $ne: req.user.id }, // Explicitly exclude loans where I am the lender
             status: { $ne: 'pending_otp' }
         });
@@ -409,7 +391,7 @@ exports.verifyLoan = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is not ready for approval or already active.' });
         }
 
-        const isBorrower = loan.borrower === req.user.id;
+        const isBorrower = String(loan.borrowerPhone).replace(/\D/g, '').slice(-10) === String(req.user.phone).replace(/\D/g, '').slice(-10);
         if (!isBorrower) return res.status(403).json({ success: false, message: 'Only the designated borrower can approve this loan.' });
 
         if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required for financial authorization' });
@@ -480,6 +462,7 @@ exports.verifyLoan = async (req, res) => {
                         startDate: new Date(loan.startDate).toLocaleDateString('en-IN')
                     })
                 });
+            }
         } catch (emailErr) {
             console.error('[Loans] verifyLoan email failed:', emailErr.message);
         }
@@ -687,38 +670,22 @@ exports.verifyLenderOtp = async (req, res) => {
 // @route   POST /api/loans/:id/close
 // @access  Private (Lender)
 exports.closeLoan = async (req, res) => {
-    const mongoose = require('mongoose');
-    const session = await mongoose.startSession();
-    session.startTransaction();
     try {
         const { intentId } = req.body;
         const Loan = require('../models/Loan');
         const TransactionIntent = require('../models/TransactionIntent');
         const FinancialLedgerService = require('../services/FinancialLedgerService');
-        
-        const loan = await Loan.findById(req.params.id).session(session);
-        if (!loan) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(404).json({ success: false, message: 'Loan not found' });
-        }
-        if (loan.lender !== req.user.id) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(403).json({ success: false, message: 'Only lender can close this loan' });
-        }
-        if (loan.status === 'closed') {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(200).json({ success: true, message: 'Loan is already closed', loan });
-        }
+        const { cacheInvalidate } = require('../middleware/cache');
+        const { invalidateLoanCache } = require('../utils/cacheUtils');
 
-        if (!intentId) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({ success: false, message: 'intentId is required' });
-        }
+        const loan = await Loan.findById(req.params.id);
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can close this loan' });
+        if (loan.status === 'closed') return res.status(200).json({ success: true, message: 'Loan is already closed', loan });
 
+        if (!intentId) return res.status(400).json({ success: false, message: 'intentId is required' });
+
+        // Atomic upsert to prevent race conditions
         let intent = await TransactionIntent.findOneAndUpdate(
             { intentId },
             {
@@ -730,16 +697,12 @@ exports.closeLoan = async (req, res) => {
                     status: 'PENDING'
                 }
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true, session }
+            { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
         if (intent.status === 'COMMITTED') {
-            await session.abortTransaction();
-            session.endSession();
             return res.status(200).json({ success: true, message: 'Loan successfully closed (idempotent).', loan });
         } else if (intent.status === 'REJECTED') {
-            await session.abortTransaction();
-            session.endSession();
             return res.status(400).json({ success: false, message: 'Transaction intent was previously rejected' });
         }
 
@@ -747,54 +710,22 @@ exports.closeLoan = async (req, res) => {
             await FinancialLedgerService.closeLoan(loan, new Date());
         } catch (e) {
             intent.status = 'REJECTED';
-            await intent.save({ session });
-            await session.commitTransaction(); // Commit the rejection!
-            session.endSession();
+            await intent.save();
             return res.status(400).json({ success: false, message: e.message });
         }
 
         loan.status = 'closed';
         loan.progress = 1.0;
-        await loan.save({ session });
+        await loan.save();
 
         intent.status = 'COMMITTED';
-        await intent.save({ session });
-        
-        if (loan.borrower) {
-            const User = require('../models/User');
-            const borrowerUser = await User.findOne({ id: loan.borrower }).session(session);
-            if (borrowerUser && borrowerUser.fcmToken) {
-                const NotificationOutbox = require('../models/NotificationOutbox');
-                await NotificationOutbox.create([{
-                    aggregateType: 'LOAN',
-                    aggregateId: loan._id.toString(),
-                    eventType: 'LOAN_CLOSED',
-                    recipientUserId: borrowerUser._id,
-                    channel: 'PUSH',
-                    payload: {
-                        fcmToken: borrowerUser.fcmToken,
-                        title: 'Loan Closed',
-                        body: `Your loan of Rs.${loan.amountPaise / 100} has been closed by the lender.`,
-                        data: { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
-                    }
-                }], { session });
-            }
-        }
+        await intent.save();
 
-        await session.commitTransaction();
-        session.endSession();
-
-        const { invalidateLoanCache } = require('../middleware/cache');
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
-        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
-        const { processOutboxEvents } = require('../utils/outboxProcessor');
-        processOutboxEvents().catch(()=>{});
 
         res.status(200).json({ success: true, message: 'Loan successfully closed.', loan });
     } catch (err) {
-        await session.abortTransaction();
-        session.endSession();
         console.error('[Loans] closeLoan Error:', err.message);
         const { sendError } = require('../utils/response');
         sendError(res, err);
@@ -868,46 +799,21 @@ exports.uploadDocument = async (req, res) => {
 
 // Custom Payment Transactions
 async function _handleCustomTransaction(req, res, actionType) {
-    const mongoose = require('mongoose');
-    const session = await mongoose.startSession();
-    session.startTransaction();
     try {
-        const { amountPaise, idToken } = req.body;
-        const intentId = req.body.intentId || req.headers['x-idempotency-key'];
+        const { amountPaise, idToken, intentId } = req.body;
+        // Fallback for strict amount parsing
         const pa = amountPaise || (req.body.amount ? Math.round(req.body.amount * 100) : 0);
 
-        const loan = await Loan.findById(req.params.id).session(session);
-        if (!loan) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(404).json({ success: false, message: 'Loan not found' });
-        }
-        if (loan.lender !== req.user.id) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
-        }
-        if (loan.status === 'closed') {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({ success: false, message: 'Loan is already closed' });
-        }
-        if (!pa || pa <= 0) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({ success: false, message: 'Invalid amount' });
-        }
-        if (!idToken) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({ success: false, message: 'idToken is required' });
-        }
+        const loan = await Loan.findById(req.params.id);
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
+        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
+        if (!pa || pa <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
         
+        if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required' });
         const { verifyFirebaseToken } = require('../utils/otpProvider');
         const verificationResult = await verifyFirebaseToken(idToken);
         if (!verificationResult.success) {
-            await session.abortTransaction();
-            session.endSession();
             return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid ID Token' });
         }
 
@@ -924,45 +830,22 @@ async function _handleCustomTransaction(req, res, actionType) {
             notifBody = `Your lender added Rs.${pa / 100}. Total payable: Rs.${loan.totalPayablePaise / 100}.`;
         }
         
-        await loan.save({ session });
+        await loan.save();
+        const { invalidateLoanCache } = require('../utils/cacheUtils');
+        await invalidateLoanCache(loan.lender, loan.borrower);
         
         if (loan.borrower) {
-            const { updateCreditScore } = require('../utils/creditScoreCalc');
-            await updateCreditScore(loan.borrower, session);
-            
+            const { updateCreditScore } = require('../utils/creditScore');
+            await updateCreditScore(loan.borrower);
             const User = require('../models/User');
-            const borrowerUser = await User.findOne({ id: loan.borrower }).session(session);
+            const borrowerUser = await User.findOne({ id: loan.borrower });
             if (borrowerUser && borrowerUser.fcmToken) {
-                const NotificationOutbox = require('../models/NotificationOutbox');
-                await NotificationOutbox.create([{
-                    aggregateType: 'LOAN',
-                    aggregateId: loan._id.toString(),
-                    eventType: 'LOAN_TRANSACTION',
-                    recipientUserId: borrowerUser._id,
-                    channel: 'PUSH',
-                    payload: {
-                        fcmToken: borrowerUser.fcmToken,
-                        title: notifTitle,
-                        body: notifBody,
-                        data: { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
-                    }
-                }], { session });
+                const { sendPushNotification } = require('../utils/fcm');
+                sendPushNotification(borrowerUser.fcmToken, notifTitle, notifBody, { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }).catch(()=>{});
             }
         }
-        
-        await session.commitTransaction();
-        session.endSession();
-        
-        const { invalidateLoanCache } = require('../middleware/cache');
-        await invalidateLoanCache(loan.lender, loan.borrower);
-        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
-        const { processOutboxEvents } = require('../utils/outboxProcessor');
-        processOutboxEvents().catch(()=>{});
-        
         res.status(200).json({ success: true, loan });
     } catch (err) {
-        await session.abortTransaction();
-        session.endSession();
         console.error('[Loans] customTransaction Error:', err.message);
         res.status(500).json({ success: false, message: err.message });
     }
@@ -971,246 +854,54 @@ exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'record
 exports.addCredit = (req, res) => _handleCustomTransaction(req, res, 'addCredit');
 exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recordInterest');
 
-exports.getInterestSchedule = async (req, res) => {
+
+
+// @desc    Get portfolio summary for insights
+// @route   GET /api/loans/portfolio-summary
+// @access  Private
+exports.getPortfolioSummary = async (req, res) => {
     try {
-        const Loan = require('../models/Loan');
-        const loan = await Loan.findById(req.params.id);
+        const userId = req.user.id;
         
-        if (!loan) {
-            return res.status(404).json({ success: false, message: 'Loan not found' });
-        }
+        const loans = await Loan.find({ lender: userId });
         
-        if (loan.lender !== req.user.id && loan.borrower !== req.user.id) {
-            return res.status(403).json({ success: false, message: 'Not authorized to view this schedule' });
-        }
-
-        const FinancialLedgerService = require('../services/FinancialLedgerService');
-        await FinancialLedgerService.accrueInterest(loan, new Date());
-        FinancialLedgerService.deriveBalances(loan);
-
-        const startDate = loan.activatedAt || loan.startDate || loan.createdAt;
-        const durationMonths = loan.durationMonths || 0;
+        let loanCount = loans.length;
+        let activeLoanCount = 0;
+        let totalLentPaise = 0;
+        let totalCollectedPaise = 0;
+        let outstandingPaise = 0;
         
-        const monthlyBuckets = {};
-        
-        const getMonthKey = (date) => {
-            const d = new Date(date);
-            return d.toLocaleString('default', { month: 'short' }) + ' ' + d.getFullYear();
-        };
-
-        loan.transactions.forEach(t => {
-            const date = t.effectiveAt || t.recordedAt;
-            const key = getMonthKey(date);
-            if (!monthlyBuckets[key]) {
-                monthlyBuckets[key] = {
-                    month: key,
-                    businessDate: date,
-                    accruedPaise: 0,
-                    paidPaise: 0,
-                    principalPaidPaise: 0
-                };
-            }
-            if (t.type === 'interest_accrued') {
-                monthlyBuckets[key].accruedPaise += (t.amountPaise || 0);
-            }
-            if (t.type === 'payment' || t.type === 'interest_payment') {
-                monthlyBuckets[key].paidPaise += (t.interestAllocationPaise || 0);
-                monthlyBuckets[key].principalPaidPaise += (t.principalAllocationPaise || 0);
-            }
-        });
-
-        const historicalSchedule = Object.values(monthlyBuckets).sort((a, b) => new Date(a.businessDate) - new Date(b.businessDate));
-        
-        let totalAccruedPaise = 0;
-        let totalPaidPaise = 0;
-        
-        historicalSchedule.forEach(p => {
-            totalAccruedPaise += p.accruedPaise;
-            totalPaidPaise += p.paidPaise;
-        });
-
-        let projectedPrincipalPaise = loan.principalOutstandingPaise;
-        const ratePct = loan.interestRate || 0;
-        const projectedSchedule = [];
-        
-        if (projectedPrincipalPaise > 0 && ratePct > 0) {
-            const endDate = new Date(startDate);
-            endDate.setMonth(endDate.getMonth() + durationMonths);
-            
-            let currentDate = new Date();
-            if (loan.status === 'active') {
-                while (currentDate < endDate) {
-                    currentDate.setMonth(currentDate.getMonth() + 1);
-                    const key = getMonthKey(currentDate);
-                    if (!monthlyBuckets[key]) {
-                        const projectedInterest = Math.floor(projectedPrincipalPaise * ratePct * 12 * 30 / 365 / 100);
-                        projectedSchedule.push({
-                            month: key,
-                            businessDate: new Date(currentDate),
-                            dueDate: new Date(currentDate),
-                            openingPrincipalPaise: projectedPrincipalPaise,
-                            accruedPaise: projectedInterest,
-                            interestAccruedPaise: projectedInterest,
-                            paidPaise: 0,
-                            interestPaidPaise: 0,
-                            principalPaidPaise: 0,
-                            closingPrincipalPaise: projectedPrincipalPaise,
-                            status: 'projected'
-                        });
-                    }
+        for (const loan of loans) {
+            if (loan.status === 'active' || loan.status === 'completed' || loan.status === 'defaulted' || loan.status === 'closed') {
+                if (loan.status === 'active') {
+                    activeLoanCount++;
                 }
+                
+                const principal = loan.amountPaise || (loan.amount * 100) || 0;
+                totalLentPaise += principal;
+                
+                const paid = loan.paidAmountPaise || (loan.paidAmount * 100) || 0;
+                totalCollectedPaise += paid;
+                
+                let out = loan.principalOutstandingPaise;
+                if (out === undefined || out === null) {
+                    out = principal - paid;
+                }
+                outstandingPaise += Math.max(0, out);
             }
         }
-
-        const fullSchedule = [...historicalSchedule, ...projectedSchedule].map(p => ({
-            ...p,
-            interestAccruedPaise: p.accruedPaise,
-            interestPaidPaise: p.paidPaise,
-            status: p.status || 'historical'
-        }));
-
+        
         res.status(200).json({
             success: true,
-            principalOutstandingPaise: loan.principalOutstandingPaise,
-            accruedInterestPaise: totalAccruedPaise,
-            interestOutstandingPaise: loan.interestOutstandingPaise,
-            interestPaidPaise: totalPaidPaise,
-            
-            totalAccruedPaise: totalAccruedPaise,
-            totalPaidPaise: totalPaidPaise,
-            outstandingInterestPaise: loan.interestOutstandingPaise,
-            originalPrincipalPaise: loan.amountPaise,
-            interestRateBps: Math.floor(ratePct * 100),
-            interestMethod: 'ACT/365 Exact (Reducing Balance)',
-            
-            schedule: fullSchedule
+            loanCount,
+            activeLoanCount,
+            totalLentPaise,
+            totalCollectedPaise,
+            outstandingPaise
         });
-
     } catch (err) {
-        console.error('[Loans] getInterestSchedule Error:', err.message);
-        res.status(500).json({ success: false, message: err.message });
-    }
-};
-
-
-exports.getInterestScheduleDebug = async (req, res) => {
-    try {
-        const Loan = require('../models/Loan');
-        const loan = await Loan.findById(req.params.id);
-        
-        if (!loan) {
-            return res.status(404).json({ success: false, message: 'Loan not found' });
-        }
-        
-        if (false) {
-            return res.status(403).json({ success: false, message: 'Not authorized to view this schedule' });
-        }
-
-        const FinancialLedgerService = require('../services/FinancialLedgerService');
-        await FinancialLedgerService.accrueInterest(loan, new Date());
-        FinancialLedgerService.deriveBalances(loan);
-
-        const startDate = loan.activatedAt || loan.startDate || loan.createdAt;
-        const durationMonths = loan.durationMonths || 0;
-        
-        const monthlyBuckets = {};
-        
-        const getMonthKey = (date) => {
-            const d = new Date(date);
-            return d.toLocaleString('default', { month: 'short' }) + ' ' + d.getFullYear();
-        };
-
-        loan.transactions.forEach(t => {
-            const date = t.effectiveAt || t.recordedAt;
-            const key = getMonthKey(date);
-            if (!monthlyBuckets[key]) {
-                monthlyBuckets[key] = {
-                    month: key,
-                    businessDate: date,
-                    accruedPaise: 0,
-                    paidPaise: 0,
-                    principalPaidPaise: 0
-                };
-            }
-            if (t.type === 'interest_accrued') {
-                monthlyBuckets[key].accruedPaise += (t.amountPaise || 0);
-            }
-            if (t.type === 'payment' || t.type === 'interest_payment') {
-                monthlyBuckets[key].paidPaise += (t.interestAllocationPaise || 0);
-                monthlyBuckets[key].principalPaidPaise += (t.principalAllocationPaise || 0);
-            }
-        });
-
-        const historicalSchedule = Object.values(monthlyBuckets).sort((a, b) => new Date(a.businessDate) - new Date(b.businessDate));
-        
-        let totalAccruedPaise = 0;
-        let totalPaidPaise = 0;
-        
-        historicalSchedule.forEach(p => {
-            totalAccruedPaise += p.accruedPaise;
-            totalPaidPaise += p.paidPaise;
-        });
-
-        let projectedPrincipalPaise = loan.principalOutstandingPaise;
-        const ratePct = loan.interestRate || 0;
-        const projectedSchedule = [];
-        
-        if (projectedPrincipalPaise > 0 && ratePct > 0) {
-            const endDate = new Date(startDate);
-            endDate.setMonth(endDate.getMonth() + durationMonths);
-            
-            let currentDate = new Date();
-            if (loan.status === 'active') {
-                while (currentDate < endDate) {
-                    currentDate.setMonth(currentDate.getMonth() + 1);
-                    const key = getMonthKey(currentDate);
-                    if (!monthlyBuckets[key]) {
-                        const projectedInterest = Math.floor(projectedPrincipalPaise * ratePct * 12 * 30 / 365 / 100);
-                        projectedSchedule.push({
-                            month: key,
-                            businessDate: new Date(currentDate),
-                            dueDate: new Date(currentDate),
-                            openingPrincipalPaise: projectedPrincipalPaise,
-                            accruedPaise: projectedInterest,
-                            interestAccruedPaise: projectedInterest,
-                            paidPaise: 0,
-                            interestPaidPaise: 0,
-                            principalPaidPaise: 0,
-                            closingPrincipalPaise: projectedPrincipalPaise,
-                            status: 'projected'
-                        });
-                    }
-                }
-            }
-        }
-
-        const fullSchedule = [...historicalSchedule, ...projectedSchedule].map(p => ({
-            ...p,
-            interestAccruedPaise: p.accruedPaise,
-            interestPaidPaise: p.paidPaise,
-            status: p.status || 'historical'
-        }));
-
-        res.status(200).json({
-            success: true,
-            principalOutstandingPaise: loan.principalOutstandingPaise,
-            accruedInterestPaise: totalAccruedPaise,
-            interestOutstandingPaise: loan.interestOutstandingPaise,
-            interestPaidPaise: totalPaidPaise,
-            
-            totalAccruedPaise: totalAccruedPaise,
-            totalPaidPaise: totalPaidPaise,
-            outstandingInterestPaise: loan.interestOutstandingPaise,
-            originalPrincipalPaise: loan.amountPaise,
-            interestRateBps: Math.floor(ratePct * 100),
-            interestMethod: 'ACT/365 Exact (Reducing Balance)',
-            
-            schedule: fullSchedule
-        });
-
-    } catch (err) {
-        console.error('[Loans] getInterestSchedule Error:', err.message);
-        res.status(500).json({ success: false, message: err.message });
+        console.error('[Loans] getPortfolioSummary Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
 

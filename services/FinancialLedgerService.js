@@ -2,38 +2,6 @@ const Loan = require('../models/Loan');
 
 class FinancialLedgerService {
 
-    static async reverseTransaction(loan, transactionIdToReverse, recordedBy, effectiveAt = new Date()) {
-        const originalTx = loan.transactions.find(t => t._id.toString() === transactionIdToReverse.toString());
-        if (!originalTx) {
-            throw new Error('Original transaction not found');
-        }
-        
-        const alreadyReversed = loan.transactions.some(t => 
-            t.reversesTransactionId && t.reversesTransactionId.toString() === transactionIdToReverse.toString()
-        );
-        if (alreadyReversed) {
-            throw new Error('Transaction already reversed');
-        }
-
-        const reversalTx = {
-            type: originalTx.type + '_reversed',
-            amountPaise: - (originalTx.amountPaise || 0),
-            principalAllocationPaise: - (originalTx.principalAllocationPaise || 0),
-            interestAllocationPaise: - (originalTx.interestAllocationPaise || 0),
-            feesAllocationPaise: - (originalTx.feesAllocationPaise || 0),
-            reversesTransactionId: originalTx._id,
-            note: 'Reversal of ' + originalTx._id,
-            recordedAt: new Date(),
-            effectiveAt: effectiveAt,
-            recordedBy: recordedBy
-        };
-
-        loan.transactions.push(reversalTx);
-        this.deriveBalances(loan);
-        
-        return { originalTx, reversalTx };
-    }
-
     static async accrueInterest(loan, effectiveAt = new Date()) {
         if (!loan.principalOutstandingPaise) {
             return; // No principal to accrue on
@@ -109,14 +77,6 @@ class FinancialLedgerService {
                     fees -= fAlloc;
                     interest -= iAlloc;
                     principal -= pAlloc;
-                    break;
-                default:
-                    if (t.type.endsWith('_reversed') || t.type === 'reversal') {
-                        paid += amt;
-                        fees -= (t.feesAllocationPaise || 0);
-                        interest -= (t.interestAllocationPaise || 0);
-                        principal -= (t.principalAllocationPaise || 0);
-                    }
                     break;
             }
         }

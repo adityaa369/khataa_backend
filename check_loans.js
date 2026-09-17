@@ -1,1 +1,29 @@
-﻿const mongoose = require('mongoose'); const Loan = require('./models/Loan'); const User = require('./models/User'); require('dotenv').config(); mongoose.connect(process.env.MONGODB_URI).then(async () => { const loan = await Loan.findOne().sort({ createdAt: -1 }); console.log('Latest Loan Status:', loan.status); let user = await User.findById(loan.borrower); if (!user) user = await User.findOne({ id: loan.borrower }); console.log('Borrower Email:', user.email, 'isVerified:', user.isEmailVerified); user.isEmailVerified = true; await user.save(); console.log('Updated user!', user.email); process.exit(0); });
+const mongoose = require('mongoose');
+const dotenv = require('dotenv');
+const Loan = require('./models/Loan');
+const User = require('./models/User');
+const connectDB = require('./config/db');
+
+dotenv.config({ path: './.env' });
+
+const checkLoans = async () => {
+    try {
+        await connectDB();
+        const userCount = await User.countDocuments();
+        const loanCount = await Loan.countDocuments();
+        console.log(`Users in DB: ${userCount}`);
+        console.log(`Loans in DB: ${loanCount}`);
+
+        if (loanCount > 0) {
+            const loans = await Loan.find({});
+            console.log('Sample Loan:', JSON.stringify(loans[0], null, 2));
+        }
+
+        process.exit();
+    } catch (err) {
+        console.error(err);
+        process.exit(1);
+    }
+};
+
+checkLoans();

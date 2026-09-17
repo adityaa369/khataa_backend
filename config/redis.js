@@ -13,21 +13,34 @@ function getRedisClient() {
     }
 
     redisClient = new Redis(redisUrl, {
-        maxRetriesPerRequest: 0,
+        maxRetriesPerRequest: 2,
         enableReadyCheck: false,
-        reconnectOnError: () => false,
-        retryStrategy: () => null, // never retry — fail fast, use memory cache
+        reconnectOnError: (err) => {
+            const targetError = 'READONLY';
+            if (err.message.includes(targetError)) return true;
+            return false;
+        },
+        retryStrategy: (times) => {
+            if (times > 5) {
+                console.log('[REDIS] Max retries reached — disabling Redis cache.');
+                redisAvailable = false;
+                return null; // stop retrying
+            }
+            return Math.min(times * 200, 2000);
+        },
         lazyConnect: true,
-    });
-
-    // MUST attach error handler or ioredis emits unhandled error events
-    redisClient.on('error', () => {
-        redisAvailable = false;
     });
 
     redisClient.on('connect', () => {
         redisAvailable = true;
         console.log('[REDIS] Connected successfully.');
+    });
+
+    redisClient.on('error', (err) => {
+        redisAvailable = false;
+        if (process.env.NODE_ENV !== 'production') {
+            console.error('[REDIS] Error:', err.message);
+        }
     });
 
     redisClient.on('close', () => {
@@ -36,7 +49,6 @@ function getRedisClient() {
 
     redisClient.connect().catch(() => {
         redisAvailable = false;
-        console.log('[REDIS] Unavailable — using in-memory cache fallback.');
     });
 
     return redisClient;
