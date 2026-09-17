@@ -749,3 +749,24 @@ exports.revokeOtherSessions = async (req, res) => {
     // Placeholder — for now just return success
     res.status(200).json({ success: true, message: 'Other sessions revoked' });
 };
+
+// @desc    Generate a custom token for the authenticated user to re-authenticate with Firebase
+// @route   GET /api/auth/firebase-custom-token
+// @access  Private
+exports.getFirebaseCustomToken = async (req, res) => {
+    try {
+        const MPinCredential = require('../models/MPinCredential');
+        const mpinCred = await MPinCredential.findOne({ userId: req.user._id });
+        
+        if (!mpinCred || !mpinCred.firebaseUid) {
+            return res.status(404).json({ success: false, message: 'Firebase UID not found for user.' });
+        }
+        
+        const admin = require('firebase-admin');
+        const customToken = await admin.auth().createCustomToken(mpinCred.firebaseUid);
+        res.status(200).json({ success: true, customToken });
+    } catch (err) {
+        console.error('[Auth] Error generating custom token:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
