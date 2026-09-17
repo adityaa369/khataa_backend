@@ -1,0 +1,1 @@
+﻿require('dotenv').config(); const admin = require('./config/firebase'); admin.auth().getUserByEmail('john@example.com').then(user => console.log(JSON.stringify(user, null, 2))).catch(e => console.error(e));

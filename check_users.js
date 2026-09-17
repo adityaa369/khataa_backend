@@ -1,0 +1,1 @@
+﻿const mongoose = require('mongoose'); const User = require('./models/User'); require('dotenv').config(); mongoose.connect(process.env.MONGODB_URI).then(async () => { const users = await User.find().sort({ createdAt: -1 }).limit(5); for (let user of users) { console.log('Phone:', user.phone, 'Email:', user.email, 'isEmailVerified:', user.isEmailVerified); } process.exit(0); });

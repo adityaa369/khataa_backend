@@ -1,0 +1,1 @@
+﻿const mongoose = require('mongoose'); const User = require('./models/User'); require('dotenv').config(); mongoose.connect(process.env.MONGODB_URI).then(async () => { await User.updateMany({}, { isEmailVerified: false, $unset: { email: '' } }); console.log('Reverted all users to unverified and no email'); process.exit(0); });

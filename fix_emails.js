@@ -1,0 +1,1 @@
+﻿const mongoose = require('mongoose'); const User = require('./models/User'); require('dotenv').config(); mongoose.connect(process.env.MONGODB_URI).then(async () => { await User.updateMany({ email: { $exists: false } }, { email: 'john@example.com' }); await User.updateMany({ email: null }, { email: 'john@example.com' }); console.log('Fixed emails'); process.exit(0); });
