@@ -687,6 +687,9 @@ exports.verifyLenderOtp = async (req, res) => {
 // @route   POST /api/loans/:id/close
 // @access  Private (Lender)
 exports.closeLoan = async (req, res) => {
+    const mongoose = require('mongoose');
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
         const { intentId } = req.body;
         const Loan = require('../models/Loan');
@@ -694,15 +697,29 @@ exports.closeLoan = async (req, res) => {
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         const { cacheInvalidate } = require('../middleware/cache');
         
+        const loan = await Loan.findById(req.params.id).session(session);
+        if (!loan) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+        if (loan.lender !== req.user.id) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(403).json({ success: false, message: 'Only lender can close this loan' });
+        }
+        if (loan.status === 'closed') {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(200).json({ success: true, message: 'Loan is already closed', loan });
+        }
 
-        const loan = await Loan.findById(req.params.id);
-        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can close this loan' });
-        if (loan.status === 'closed') return res.status(200).json({ success: true, message: 'Loan is already closed', loan });
+        if (!intentId) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, message: 'intentId is required' });
+        }
 
-        if (!intentId) return res.status(400).json({ success: false, message: 'intentId is required' });
-
-        // Atomic upsert to prevent race conditions
         let intent = await TransactionIntent.findOneAndUpdate(
             { intentId },
             {
@@ -714,12 +731,16 @@ exports.closeLoan = async (req, res) => {
                     status: 'PENDING'
                 }
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, new: true, setDefaultsOnInsert: true, session }
         );
 
         if (intent.status === 'COMMITTED') {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(200).json({ success: true, message: 'Loan successfully closed (idempotent).', loan });
         } else if (intent.status === 'REJECTED') {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({ success: false, message: 'Transaction intent was previously rejected' });
         }
 
@@ -727,22 +748,53 @@ exports.closeLoan = async (req, res) => {
             await FinancialLedgerService.closeLoan(loan, new Date());
         } catch (e) {
             intent.status = 'REJECTED';
-            await intent.save();
+            await intent.save({ session });
+            await session.commitTransaction(); // Commit the rejection!
+            session.endSession();
             return res.status(400).json({ success: false, message: e.message });
         }
 
         loan.status = 'closed';
         loan.progress = 1.0;
-        await loan.save();
+        await loan.save({ session });
 
         intent.status = 'COMMITTED';
-        await intent.save();
+        await intent.save({ session });
+        
+        if (loan.borrower) {
+            const User = require('../models/User');
+            const borrowerUser = await User.findOne({ id: loan.borrower }).session(session);
+            if (borrowerUser && borrowerUser.fcmToken) {
+                const NotificationOutbox = require('../models/NotificationOutbox');
+                await NotificationOutbox.create([{
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    eventType: 'LOAN_CLOSED',
+                    recipientUserId: borrowerUser._id,
+                    channel: 'PUSH',
+                    payload: {
+                        fcmToken: borrowerUser.fcmToken,
+                        title: 'Loan Closed',
+                        body: `Your loan of Rs.${loan.amountPaise / 100} has been closed by the lender.`,
+                        data: { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
+                    }
+                }], { session });
+            }
+        }
 
+        await session.commitTransaction();
+        session.endSession();
+
+        const { invalidateLoanCache } = require('../middleware/cache');
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+        const { processOutboxEvents } = require('../utils/outboxProcessor');
+        processOutboxEvents().catch(()=>{});
 
         res.status(200).json({ success: true, message: 'Loan successfully closed.', loan });
     } catch (err) {
+        await session.abortTransaction();
+        session.endSession();
         console.error('[Loans] closeLoan Error:', err.message);
         const { sendError } = require('../utils/response');
         sendError(res, err);
@@ -816,22 +868,46 @@ exports.uploadDocument = async (req, res) => {
 
 // Custom Payment Transactions
 async function _handleCustomTransaction(req, res, actionType) {
+    const mongoose = require('mongoose');
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
         const { amountPaise, idToken } = req.body;
         const intentId = req.body.intentId || req.headers['x-idempotency-key'];
-        // Fallback for strict amount parsing
         const pa = amountPaise || (req.body.amount ? Math.round(req.body.amount * 100) : 0);
 
-        const loan = await Loan.findById(req.params.id);
-        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
-        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
-        if (!pa || pa <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
+        const loan = await Loan.findById(req.params.id).session(session);
+        if (!loan) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+        if (loan.lender !== req.user.id) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
+        }
+        if (loan.status === 'closed') {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, message: 'Loan is already closed' });
+        }
+        if (!pa || pa <= 0) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, message: 'Invalid amount' });
+        }
+        if (!idToken) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, message: 'idToken is required' });
+        }
         
-        if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required' });
         const { verifyFirebaseToken } = require('../utils/otpProvider');
         const verificationResult = await verifyFirebaseToken(idToken);
         if (!verificationResult.success) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid ID Token' });
         }
 
@@ -848,22 +924,44 @@ async function _handleCustomTransaction(req, res, actionType) {
             notifBody = `Your lender added Rs.${pa / 100}. Total payable: Rs.${loan.totalPayablePaise / 100}.`;
         }
         
-        await loan.save();
-        
-        await invalidateLoanCache(loan.lender, loan.borrower);
+        await loan.save({ session });
         
         if (loan.borrower) {
-            const { updateCreditScore } = require('../utils/creditScore');
-            await updateCreditScore(loan.borrower);
+            const { updateCreditScore } = require('../utils/creditScoreCalc');
+            await updateCreditScore(loan.borrower, session);
+            
             const User = require('../models/User');
-            const borrowerUser = await User.findOne({ id: loan.borrower });
+            const borrowerUser = await User.findOne({ id: loan.borrower }).session(session);
             if (borrowerUser && borrowerUser.fcmToken) {
-                const { sendPushNotification } = require('../utils/fcm');
-                sendPushNotification(borrowerUser.fcmToken, notifTitle, notifBody, { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }).catch(()=>{});
+                const NotificationOutbox = require('../models/NotificationOutbox');
+                await NotificationOutbox.create([{
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    eventType: 'LOAN_TRANSACTION',
+                    recipientUserId: borrowerUser._id,
+                    channel: 'PUSH',
+                    payload: {
+                        fcmToken: borrowerUser.fcmToken,
+                        title: notifTitle,
+                        body: notifBody,
+                        data: { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }
+                    }
+                }], { session });
             }
         }
+        
+        await session.commitTransaction();
+        session.endSession();
+        
+        const { invalidateLoanCache } = require('../middleware/cache');
+        await invalidateLoanCache(loan.lender, loan.borrower);
+        const { processOutboxEvents } = require('../utils/outboxProcessor');
+        processOutboxEvents().catch(()=>{});
+        
         res.status(200).json({ success: true, loan });
     } catch (err) {
+        await session.abortTransaction();
+        session.endSession();
         console.error('[Loans] customTransaction Error:', err.message);
         res.status(500).json({ success: false, message: err.message });
     }

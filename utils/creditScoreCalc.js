@@ -1,9 +1,9 @@
-const CreditScore = require('../models/CreditScore');
+﻿const CreditScore = require('../models/CreditScore');
 const Loan = require('../models/Loan');
 const ChitSubscription = require('../models/ChitSubscription');
 
-async function updateCreditScore(userId) {
-    const loans = await Loan.find({ borrower: userId, status: { $in: ['active', 'completed', 'overdue', 'defaulted'] } });
+async function updateCreditScore(userId, session = null) {
+    const loans = await Loan.find({ borrower: userId, status: { $in: ['active', 'completed', 'overdue', 'defaulted'] } }).session(session);
 
     if (loans.length === 0) return;
 
@@ -59,7 +59,7 @@ async function updateCreditScore(userId) {
     });
 
     // 4. Phase 5: Chit Funds Impact Addition
-    const chits = await ChitSubscription.find({ user: userId }).populate('chitFund');
+    const chits = await ChitSubscription.find({ user: userId }).populate('chitFund').session(session);
     let chitPoints = 0;
     
     chits.forEach(sub => {
@@ -105,7 +105,7 @@ async function updateCreditScore(userId) {
             status,
             lastUpdated: Date.now()
         },
-        { upsert: true }
+        { upsert: true, session }
     );
 }
 
