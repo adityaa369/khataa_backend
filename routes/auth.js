@@ -25,6 +25,8 @@ router.post('/send-otp-msg91', authLimiter, authController.sendOtpMsg91);
 router.post('/verify-otp-msg91', authLimiter, authController.verifyOtpMsg91);
 router.post('/register', protect, validateRegister, authController.register);
 router.get('/me', protect, authController.getMe);
+router.get('/firebase-custom-token', protect, authController.getFirebaseCustomToken);
+router.post('/sync-firebase', protect, authController.syncFirebaseState);
 router.get('/verify-email/:token', authController.verifyEmail);
 
 router.post('/mpin/setup', protect, authController.setupMpin);
