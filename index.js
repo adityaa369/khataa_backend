@@ -112,6 +112,34 @@ app.use('/api/admin', adminRoutes);
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
 app.get('/api/version', (req, res) => res.json({ success: true, commit: process.env.RENDER_GIT_COMMIT || 'unknown' }));
 
+app.get('/api/diagnostic', async (req, res) => {
+    const envValue = process.env.FINANCIAL_KILL_SWITCH;
+    let mongoKs = null;
+    try {
+        const mongoose = require('mongoose');
+        const FinancialKillSwitch = require('./models/FinancialKillSwitch');
+        mongoKs = await FinancialKillSwitch.findOne({ key: 'FINANCIAL' });
+    } catch(e) {}
+    
+    let activeSource = 'NONE (NORMAL)';
+    let currentState = 'false';
+    let reason = 'N/A';
+    let lastUpdated = 'N/A';
+
+    if (envValue === 'true') {
+        activeSource = 'RENDER ENVIRONMENT VARIABLE';
+        currentState = 'true';
+        reason = 'Emergency override via Render Dashboard';
+    } else if (mongoKs && mongoKs.enabled) {
+        activeSource = 'MONGODB';
+        currentState = 'true';
+        reason = mongoKs.reason || 'Unknown';
+        lastUpdated = mongoKs.updatedAt || 'Unknown';
+    }
+    
+    res.json({ SOURCE: activeSource, CURRENT_STATE: currentState, WHY_IT_IS_ACTIVE: reason, LAST_UPDATED: lastUpdated, SAFE_TO_RESTORE_NORMAL: 'YES' });
+});
+
 // ─── Dev-only DB Clear (NEVER in production) ────────────────────────────────
 if (process.env.NODE_ENV !== 'production') {
     app.get('/api/dev/clear-db', async (req, res) => {
