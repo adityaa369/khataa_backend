@@ -13,7 +13,8 @@ const {
     uploadDocument,
     recordPayment,
     addCredit,
-    recordInterest
+    recordInterest,
+    getPortfolioSummary
 } = require('../controllers/loans');
 const { protect } = require('../middleware/auth');
 const { cacheMiddleware } = require('../middleware/cache');
