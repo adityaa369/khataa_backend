@@ -97,7 +97,7 @@ const LoanSchema = new mongoose.Schema({
         {
             type: {
                 type: String,
-                enum: ['payment', 'interest_payment', 'credit_added', 'loan_given', 'interest_accrued'],
+                enum: ['payment', 'interest_payment', 'credit_added', 'loan_given', 'interest_accrued', 'payment_reversed', 'interest_payment_reversed', 'reversal'],
                 required: true
             },
             amount: {
