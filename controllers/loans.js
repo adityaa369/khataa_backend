@@ -299,7 +299,15 @@ exports.getLoanById = async (req, res) => {
             .populate('lender', 'firstName lastName phone')
             .populate('borrower', 'firstName lastName phone');
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender.id !== req.user.id && loan.borrower.id !== req.user.id) return res.status(403).json({ success: false, message: 'Not authorized' });
+        
+        const isLender = loan.lender && (loan.lender.id === req.user.id || loan.lender === req.user.id);
+        const isBorrower = (loan.borrower && (loan.borrower.id === req.user.id || loan.borrower === req.user.id)) || 
+                           (loan.borrowerPhone === req.user.phone.toString().replace(/^\+?91/, ''));
+                           
+        if (!isLender && !isBorrower) {
+            return res.status(403).json({ success: false, message: 'Not authorized to view this loan' });
+        }
+
         res.status(200).json({ success: true, loan });
     } catch (err) {
         console.error('[Loans] getLoanById Error:', err.message);

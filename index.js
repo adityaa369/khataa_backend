@@ -14,6 +14,10 @@ dotenv.config();
 
 const app = express();
 
+// Trust the reverse proxy (Render) so rate limiting works correctly
+app.set('trust proxy', 1);
+
+
 // ─── Security Headers ───────────────────────────────────────────────────────
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow uploads to load

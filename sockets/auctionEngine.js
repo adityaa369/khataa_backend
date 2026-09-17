@@ -1,5 +1,5 @@
 const { Server } = require('socket.io');
-const Redis = require('ioredis');
+const { getRedisClient } = require('../config/redis');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const ChitLedger = require('../models/ChitLedger');
@@ -8,12 +8,7 @@ const ChitGroup = require('../models/ChitGroup');
 // We use an in-memory map or Redis for active timers. 
 // For single-node simplicity during dev, we can use an in-memory map, 
 // but we will prepare the Redis client as requested.
-let redisClient;
-try {
-    redisClient = new Redis(process.env.REDIS_URI || 'redis://127.0.0.1:6379');
-} catch (e) {
-    console.error('[AuctionEngine] Redis connection failed, falling back to memory if needed.', e);
-}
+const redisClient = getRedisClient();
 
 const activeAuctions = {}; // In-memory fallback/cache
 

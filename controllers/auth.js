@@ -603,9 +603,9 @@ exports.setupMpin = async (req, res) => {
         const hash = await bcrypt.hash(mpin, salt);
         
         await MPinCredential.findOneAndUpdate(
-            { userId: req.user.id },
+            { userId: req.user._id },
             { 
-                userId: req.user.id,
+                userId: req.user._id,
                 firebaseUid: req.user.firebaseUid || ('mock_uid_' + req.user.phone),
                 mpinHash: hash,
                 failedAttempts: 0,
@@ -696,7 +696,7 @@ exports.verifyMpin = async (req, res) => {
 exports.getMpinStatus = async (req, res) => {
     try {
         const MPinCredential = require('../models/MPinCredential');
-        const cred = await MPinCredential.findOne({ userId: req.user.id });
+        const cred = await MPinCredential.findOne({ userId: req.user._id });
         res.status(200).json({ success: true, hasMpin: !!cred });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Server error' });
