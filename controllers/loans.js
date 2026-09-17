@@ -695,7 +695,6 @@ exports.closeLoan = async (req, res) => {
         const Loan = require('../models/Loan');
         const TransactionIntent = require('../models/TransactionIntent');
         const FinancialLedgerService = require('../services/FinancialLedgerService');
-        const { cacheInvalidate } = require('../config/redis');
         
         const loan = await Loan.findById(req.params.id).session(session);
         if (!loan) {
@@ -786,7 +785,6 @@ exports.closeLoan = async (req, res) => {
         session.endSession();
 
         const { invalidateLoanCache } = require('../middleware/cache');
-        const { cacheInvalidate } = require('../config/redis');
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
@@ -956,7 +954,6 @@ async function _handleCustomTransaction(req, res, actionType) {
         session.endSession();
         
         const { invalidateLoanCache } = require('../middleware/cache');
-        const { cacheInvalidate } = require('../config/redis');
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
         const { processOutboxEvents } = require('../utils/outboxProcessor');
