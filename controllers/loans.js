@@ -817,7 +817,8 @@ exports.uploadDocument = async (req, res) => {
 // Custom Payment Transactions
 async function _handleCustomTransaction(req, res, actionType) {
     try {
-        const { amountPaise, idToken, intentId } = req.body;
+        const { amountPaise, idToken } = req.body;
+        const intentId = req.body.intentId || req.headers['x-idempotency-key'];
         // Fallback for strict amount parsing
         const pa = amountPaise || (req.body.amount ? Math.round(req.body.amount * 100) : 0);
 
