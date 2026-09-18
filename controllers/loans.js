@@ -685,7 +685,7 @@ exports.closeLoan = async (req, res) => {
         const TransactionIntent = require('../models/TransactionIntent');
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         const { cacheInvalidate } = require('../middleware/cache');
-        const { invalidateLoanCache } = require('../utils/cacheUtils');
+        const { invalidateLoanCache } = require('../middleware/cache');
 
         const loan = await Loan.findById(req.params.id);
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
@@ -840,7 +840,7 @@ async function _handleCustomTransaction(req, res, actionType) {
         }
         
         await loan.save();
-        const { invalidateLoanCache } = require('../utils/cacheUtils');
+        const { invalidateLoanCache } = require('../middleware/cache');
         await invalidateLoanCache(loan.lender, loan.borrower);
         
         if (loan.borrower) {
