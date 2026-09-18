@@ -723,6 +723,22 @@ exports.verifyMpin = async (req, res) => {
         const admin = require('firebase-admin');
         const customToken = await admin.auth().createCustomToken(mpinCred.firebaseUid);
 
+        // SYNC EMAIL TO FIREBASE (self-heal on every MPIN login)
+        if (user.email && mpinCred.firebaseUid) {
+            try {
+                const fbUser = await admin.auth().getUser(mpinCred.firebaseUid);
+                if (fbUser.email !== user.email) {
+                    await admin.auth().updateUser(mpinCred.firebaseUid, {
+                        email: user.email,
+                        emailVerified: user.isEmailVerified || false
+                    });
+                    console.log(`[Auth] verifyMpin: synced email to Firebase for user ${user.id}`);
+                }
+            } catch (syncErr) {
+                console.error(`[Auth] verifyMpin: email sync failed for user ${user.id}: ${syncErr.message}`);
+            }
+        }
+
         const jwt = require('jsonwebtoken');
         const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
             expiresIn: '30d'
@@ -841,5 +857,45 @@ exports.syncFirebaseState = async (req, res) => {
     } catch (err) {
         console.error('[Auth] Error syncing firebase state:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+// @desc    Sync Mongo email to Firebase Auth (repair missing Firebase email)
+// @route   POST /api/auth/sync-email-to-firebase
+// @access  Private
+exports.syncEmailToFirebase = async (req, res) => {
+    try {
+        const User = require('../models/User');
+        const user = await User.findOne({ id: req.user.id });
+        
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+        
+        if (!user.email) {
+            return res.status(400).json({ success: false, message: 'No email in user profile' });
+        }
+        
+        if (!user.firebaseUid) {
+            return res.status(400).json({ success: false, message: 'No Firebase UID linked' });
+        }
+        
+        const admin = require('firebase-admin');
+        const fbUser = await admin.auth().getUser(user.firebaseUid);
+        
+        if (fbUser.email === user.email) {
+            return res.status(200).json({ success: true, message: 'Already synced', email: user.email });
+        }
+        
+        await admin.auth().updateUser(user.firebaseUid, {
+            email: user.email,
+            emailVerified: user.isEmailVerified || false
+        });
+        
+        console.log(`[Auth] syncEmailToFirebase: attached email for user ${user.id}`);
+        res.status(200).json({ success: true, message: 'Email synced to Firebase', email: user.email });
+    } catch (err) {
+        console.error('[Auth] syncEmailToFirebase error:', err.message);
+        res.status(500).json({ success: false, message: err.message });
     }
 };
