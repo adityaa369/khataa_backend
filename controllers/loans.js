@@ -844,7 +844,7 @@ async function _handleCustomTransaction(req, res, actionType) {
         await invalidateLoanCache(loan.lender, loan.borrower);
         
         if (loan.borrower) {
-            const { updateCreditScore } = require('../utils/creditScore');
+            const { updateCreditScore } = require('../utils/creditScoreCalc');
             await updateCreditScore(loan.borrower);
             const User = require('../models/User');
             const borrowerUser = await User.findOne({ id: loan.borrower });
