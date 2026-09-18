@@ -62,6 +62,23 @@ exports.verifyOtp = async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
+        // SYNC EMAIL TO FIREBASE (Registration & Repair)
+        if (user.email && result.uid) {
+            try {
+                const admin = require('firebase-admin');
+                const fbUser = await admin.auth().getUser(result.uid);
+                if (fbUser.email !== user.email) {
+                    await admin.auth().updateUser(result.uid, {
+                        email: user.email,
+                        emailVerified: user.isEmailVerified || false
+                    });
+                    console.log(`[Auth] Synchronized email for user ${user.id} to Firebase Auth`);
+                }
+            } catch (err) {
+                console.error(`[Auth] Failed to sync email to Firebase for user ${user.id}: ${err.message}`);
+            }
+        }
+
         // Ensure legacy users have an id field
         if (!user.id) {
             user.id = crypto.randomUUID();
@@ -119,6 +136,21 @@ exports.register = async (req, res) => {
             { $set: updates },
             { new: true, runValidators: true }
         );
+
+        if (updates.email && user.firebaseUid) {
+            try {
+                const admin = require('firebase-admin');
+                await admin.auth().updateUser(user.firebaseUid, {
+                    email: updates.email,
+                    emailVerified: false
+                });
+                user.isEmailVerified = false; // Require re-verification
+                await user.save();
+            } catch (err) {
+                console.error(`[Auth] Failed to update Firebase email for user ${user.id}: ${err.message}`);
+                // Proceed anyway, but log it
+            }
+        }
 
         res.status(200).json({
             success: true,
