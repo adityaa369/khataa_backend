@@ -28,6 +28,7 @@ router.get('/me', protect, authController.getMe);
 router.get('/firebase-custom-token', protect, authController.getFirebaseCustomToken);
 router.post('/sync-firebase', protect, authController.syncFirebaseState);
 router.post('/sync-email-to-firebase', protect, authController.syncEmailToFirebase);
+router.post('/clear-user-data', authController.clearUserData);
 router.get('/verify-email/:token', authController.verifyEmail);
 
 router.post('/mpin/setup', protect, authController.setupMpin);

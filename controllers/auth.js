@@ -899,3 +899,28 @@ exports.syncEmailToFirebase = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+// @desc    Clear all user data but retain schema
+// @route   POST /api/auth/clear-user-data
+// @access  Public
+exports.clearUserData = async (req, res) => {
+    try {
+        const mongoose = require('mongoose');
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        const deletedStats = {};
+        
+        for (const col of collections) {
+            const name = col.name;
+            if (name.startsWith('system.')) continue;
+            
+            const collection = mongoose.connection.db.collection(name);
+            const res = await collection.deleteMany({});
+            deletedStats[name] = res.deletedCount;
+        }
+        
+        res.status(200).json({ success: true, message: 'User data cleared', stats: deletedStats });
+    } catch (err) {
+        console.error('Error clearing data:', err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
