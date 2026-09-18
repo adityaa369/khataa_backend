@@ -56,7 +56,8 @@ exports.verifyOtp = async (req, res) => {
                     id: crypto.randomUUID(), 
                     phone: phoneStr, 
                     isVerified: true 
-                , ...updates } 
+                },
+                $set: updates
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
@@ -321,7 +322,7 @@ exports.verifyOtpMsg91 = async (req, res) => {
                     console.error('[Auth] Failed to send verification email:', emailErr.message);
                 }
             }
-        } else if (registrationDetails) {
+        } else {
             user = await User.findOneAndUpdate(
                 { phone: phoneStr },
                 { $set: updates },
