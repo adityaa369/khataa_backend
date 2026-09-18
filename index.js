@@ -112,6 +112,7 @@ app.use('/api/admin', adminRoutes);
 
 // ─── Health Check ───────────────────────────────────────────────────────────
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
+app.get('/api/version', (req, res) => res.json({ success: true, commit: process.env.RENDER_GIT_COMMIT || 'f32efdc', version: '1.0.0', environment: process.env.NODE_ENV || 'production' }));
 
 // ─── Dev-only DB Clear (NEVER in production) ────────────────────────────────
 if (process.env.NODE_ENV !== 'production') {

@@ -296,8 +296,8 @@ exports.getGivenLoans = async (req, res) => {
 exports.getLoanById = async (req, res) => {
     try {
         const loan = await Loan.findById(req.params.id)
-            .populate('lender', 'firstName lastName phone')
-            .populate('borrower', 'firstName lastName phone');
+            .populate({ path: 'lender', model: 'User', localField: 'lender', foreignField: 'id', select: 'firstName lastName phone' })
+            .populate({ path: 'borrower', model: 'User', localField: 'borrower', foreignField: 'id', select: 'firstName lastName phone' });
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
         
         const isLender = loan.lender && (loan.lender.id === req.user.id || loan.lender === req.user.id);
