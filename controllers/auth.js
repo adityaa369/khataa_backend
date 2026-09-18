@@ -62,6 +62,12 @@ exports.verifyOtp = async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
+        // Ensure legacy users have an id field
+        if (!user.id) {
+            user.id = crypto.randomUUID();
+            await user.save();
+        }
+
         // Check if we need to initialize CreditScore (if new user)
         const existingScore = await CreditScore.findOne({ user: user.id });
         if (!existingScore) {
@@ -522,6 +528,12 @@ exports.verifyOtpMsg91 = async (req, res) => {
                 { $set: updates },
                 { new: true }
             );
+        }
+
+        // Ensure legacy users have an id field
+        if (!user.id) {
+            user.id = crypto.randomUUID();
+            await user.save();
         }
 
         const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
