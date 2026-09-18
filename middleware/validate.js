@@ -57,9 +57,17 @@ const validateCreateLoan = [
 
 // Payment recording validation
 const validatePaymentAmount = [
-    body('amount')
-        .notEmpty().withMessage('Amount is required')
-        .isFloat({ min: 1 }).withMessage('Amount must be greater than 0'),
+    body().custom((value, { req }) => {
+        if (req.body.amountPaise === undefined && req.body.amount === undefined) {
+            throw new Error('Amount is required');
+        }
+        const rawAmt = req.body.amountPaise !== undefined ? req.body.amountPaise : req.body.amount;
+        const amt = Number(rawAmt);
+        if (isNaN(amt) || amt <= 0) {
+            throw new Error('Amount must be greater than 0');
+        }
+        return true;
+    }),
     handleValidationErrors
 ];
 
