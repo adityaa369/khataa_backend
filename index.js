@@ -54,8 +54,8 @@ app.use('/api', globalLimiter);
 
 // ─── Body Parsing ───────────────────────────────────────────────────────────
 app.use(compression());
-app.use(bodyParser.json({ limit: '5mb' }));
-app.use(bodyParser.urlencoded({ limit: '5mb', extended: true }));
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
 // ─── NoSQL Injection & Parameter Pollution Protection ───────────────────────
 app.use(mongoSanitize()); // strips $, . from request body/params/query
