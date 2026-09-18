@@ -13,7 +13,7 @@ const TransactionIntentSchema = new mongoose.Schema({
     action: {
         type: String,
         required: true,
-        enum: ['CLOSE_LOAN', 'PAYMENT', 'ADD_CREDIT']
+        enum: ['CLOSE_LOAN', 'PAYMENT', 'ADD_CREDIT', 'ACCEPT_LOAN']
     },
     status: {
         type: String,
@@ -24,10 +24,17 @@ const TransactionIntentSchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    payload: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+    },
+    expiresAt: {
+        type: Date
+    },
     createdAt: {
         type: Date,
         default: Date.now,
-        expires: 86400 // Intenets expire after 24h
+        expires: 86400 // Intents expire after 24h
     }
 });
 
