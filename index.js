@@ -100,6 +100,7 @@ const notificationRoutes = require('./routes/notifications');
 const chitFundRoutes = require('./routes/chitFunds');
 const documentRoutes = require('./routes/documents');
 const adminRoutes = require('./routes/admin');
+const intentRoutes = require('./routes/intents');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/loans', loanRoutes);
@@ -109,6 +110,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/chitfunds', chitFundRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/intents', intentRoutes);
 
 // ─── Health Check ───────────────────────────────────────────────────────────
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));
