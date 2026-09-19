@@ -62,6 +62,15 @@ const UserSchema = new mongoose.Schema({
     firebaseUid: {
         type: String,
         required: false
+    },
+    // Notification preferences — persisted server-side for cross-device sync
+    notificationPreferences: {
+        loanUpdates:    { type: Boolean, default: true },   // TRANSACTIONAL
+        paymentUpdates: { type: Boolean, default: true },   // TRANSACTIONAL
+        securityAlerts: { type: Boolean, default: true },   // MANDATORY — cannot disable
+        kycUpdates:     { type: Boolean, default: true },   // TRANSACTIONAL
+        chitFundUpdates:{ type: Boolean, default: true },
+        promotional:    { type: Boolean, default: false }   // OPTIONAL
     }
 }, {
     timestamps: true

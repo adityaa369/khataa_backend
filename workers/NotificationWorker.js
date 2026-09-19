@@ -62,6 +62,18 @@ class NotificationWorker {
         if (!event) return false; // No events to process
 
         try {
+            // --- Preference Gate ---
+            // IN_APP is always delivered. PUSH/EMAIL honour user preferences.
+            // Security/transactional events always pass through.
+            if (event.channel === 'PUSH' || event.channel === 'EMAIL') {
+                const prefBlocked = await this.isBlockedByPreference(event);
+                if (prefBlocked) {
+                    // Skip silently — not a failure, just user preference
+                    await this.markSent(event); // Mark as sent to avoid re-processing
+                    return true;
+                }
+            }
+
             if (event.channel === 'PUSH') {
                 await this.processPush(event);
             } else if (event.channel === 'EMAIL') {
@@ -173,6 +185,39 @@ class NotificationWorker {
             data: event.payload
         });
         await this.markSent(event);
+    }
+
+    /**
+     * Check user's notification preferences for this event.
+     * Security events (MPIN_CREATED, EMAIL_VERIFIED, ACCOUNT_CREATED) are always delivered.
+     * Returns true if the notification should be SUPPRESSED based on preference.
+     */
+    static async isBlockedByPreference(event) {
+        const SECURITY_EVENTS = new Set(['MPIN_CREATED', 'EMAIL_VERIFIED', 'ACCOUNT_CREATED']);
+        if (SECURITY_EVENTS.has(event.eventType)) return false; // Always deliver security
+
+        const User = require('../models/User');
+        const user = await User.findById(event.recipientUserId).select('notificationPreferences');
+        if (!user) return false; // Can't find user — let it through
+        
+        const prefs = user.notificationPreferences || {};
+        const LOAN_EVENTS = new Set([
+            'LOAN_CREATED', 'LOAN_RECEIVED', 'AGREEMENT_READY', 'AGREEMENT_ACCEPTED',
+            'LOAN_ACTIVATED', 'LOAN_COMPLETED', 'LOAN_CLOSED'
+        ]);
+        const PAYMENT_EVENTS = new Set(['PAYMENT_RECEIVED', 'PAYMENT_FAILED']);
+        const KYC_EVENTS = new Set(['KYC_UPDATE']);
+        const CHIT_EVENTS = new Set([
+            'CHIT_INVITE', 'CHIT_JOINED', 'CHIT_CONTRIBUTION_DUE',
+            'AUCTION_OPENED', 'AUCTION_CLOSED', 'CHIT_PAYOUT'
+        ]);
+
+        if (LOAN_EVENTS.has(event.eventType)    && prefs.loanUpdates    === false) return true;
+        if (PAYMENT_EVENTS.has(event.eventType) && prefs.paymentUpdates === false) return true;
+        if (KYC_EVENTS.has(event.eventType)     && prefs.kycUpdates     === false) return true;
+        if (CHIT_EVENTS.has(event.eventType)    && prefs.chitFundUpdates === false) return true;
+
+        return false; // Deliver
     }
 
     static async markSent(event) {
