@@ -205,18 +205,21 @@ exports.createLoan = async (req, res) => {
         const lenderName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'A lender';
 
         // Send FCM alert telling borrower setup has been initiated
-        if (borrower.fcmToken) {
-            const { sendPushNotification } = require('../utils/fcm');
-            Notification.create({ userId: borrower._id, title: 'Lender Setup Verification', body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`, data: { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() } }).catch(err => console.log('Notification DB Error', err));
-            sendPushNotification(
-                borrower.fcmToken,
-                'Lender Setup Verification',
-                `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
-                { type: 'LOAN_INIT_OTP', loanId: loan._id.toString() }
-            ).catch(fcmErr => {
-                console.error('[Loans] FCM init setup push notification failed:', fcmErr.message);
-            });
-        }
+        const EventDispatcher = require('../utils/EventDispatcher');
+        const NotificationEvents = require('../utils/NotificationEvents');
+        
+        EventDispatcher.dispatch({
+            eventType: NotificationEvents.AGREEMENT_READY,
+            aggregateType: 'LOAN',
+            aggregateId: loan._id.toString(),
+            recipientUserId: borrower._id,
+            payload: {
+                title: 'Lender Setup Verification',
+                body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
+                type: 'LOAN_INIT_OTP',
+                loanId: loan._id.toString()
+            }
+        }).catch(err => console.error('[EventDispatcher] Failed:', err.message));
 
         const loanResponse = loan.toObject();
         loanResponse.id = loan._id.toString();
@@ -455,48 +458,50 @@ exports.verifyLoan = async (req, res) => {
 
         await loan.save();
 
-        try {
-            if (req.user.email) {
-                const lenderUser = await User.findOne({ id: loan.lender });
-                await sendEmail({
-                    to: req.user.email,
-                    subject: `Credit Agreement Activated — ₹${loan.amount.toLocaleString('en-IN')}`,
-                    html: loanGivenTemplate({
-                        lenderName: lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'Your Lender',
-                        borrowerName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.phone,
-                        amount: loan.amount,
-                        loanType: loan.loanType || 'Credit',
-                        duration: loan.durationMonths,
-                        interestRate: loan.interestRate || 0,
-                        startDate: new Date(loan.startDate).toLocaleDateString('en-IN')
-                    })
-                });
-            }
-        } catch (emailErr) {
-            console.error('[Loans] verifyLoan email failed:', emailErr.message);
-        }
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
-        const { sendPushNotification } = require('../utils/fcm');
+        const EventDispatcher = require('../utils/EventDispatcher');
+        const NotificationEvents = require('../utils/NotificationEvents');
 
         const lenderUser = await User.findOne({ id: loan.lender });
-        if (lenderUser && lenderUser.fcmToken) {
-            sendPushNotification(
-                lenderUser.fcmToken,
-                'Agreement Accepted',
-                `${req.user.firstName || 'A borrower'} has signed and accepted your loan agreement for ₹${loan.amount}.`,
-                { type: 'LOAN_VERIFIED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM Lender verify notification failed:', err.message));
+        if (lenderUser) {
+            EventDispatcher.dispatch({
+                eventType: NotificationEvents.AGREEMENT_ACCEPTED,
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                recipientUserId: lenderUser._id,
+                payload: {
+                    title: 'Agreement Accepted',
+                    body: `${req.user.firstName || 'A borrower'} has signed and accepted your loan agreement for ₹${loan.amount}.`,
+                    type: 'LOAN_VERIFIED',
+                    loanId: loan._id.toString()
+                }
+            }).catch(err => console.error('[EventDispatcher] Failed:', err.message));
         }
 
-        if (req.user && req.user.fcmToken) {
-            sendPushNotification(
-                req.user.fcmToken,
-                'Agreement Activated',
-                `Your loan agreement for ₹${loan.amount} is now active and on track.`,
-                { type: 'LOAN_VERIFIED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM Borrower verify notification failed:', err.message));
+        if (req.user) {
+            EventDispatcher.dispatch({
+                eventType: NotificationEvents.LOAN_ACTIVATED,
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                recipientUserId: req.user._id,
+                channels: ['PUSH', 'IN_APP', 'EMAIL'], // Request email delivery
+                payload: {
+                    title: 'Agreement Activated',
+                    body: `Your loan agreement for ₹${loan.amount} is now active and on track.`,
+                    type: 'LOAN_VERIFIED',
+                    loanId: loan._id.toString(),
+                    // Template data for worker
+                    amount: loan.amount,
+                    loanType: loan.loanType,
+                    durationMonths: loan.durationMonths,
+                    interestRate: loan.interestRate,
+                    startDate: loan.startDate,
+                    lenderName: lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'Your Lender',
+                    borrowerName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.phone
+                }
+            }).catch(err => console.error('[EventDispatcher] Failed:', err.message));
         }
         
         console.log('--- END DEBUG ---\n');
@@ -578,17 +583,24 @@ exports.updateProgress = async (req, res) => {
         if (loan.borrower) {
             await updateCreditScore(loan.borrower);
             
-            // Send Push Notification so borrower UI refreshes automatically
+            const EventDispatcher = require('../utils/EventDispatcher');
+            const NotificationEvents = require('../utils/NotificationEvents');
+            
             const User = require('../models/User');
             const borrowerUser = await User.findOne({ id: loan.borrower });
-            if (borrowerUser && borrowerUser.fcmToken) {
-                const { sendPushNotification } = require('../utils/fcm');
-                sendPushNotification(
-                    borrowerUser.fcmToken,
-                    'Loan Progress Updated',
-                    `Your lender has updated the repayment progress for your loan of ₹${loan.amount}.`,
-                    { type: 'LOAN_PROGRESS_UPDATED', loanId: loan._id.toString() }
-                ).catch(err => console.error('[Loans] FCM updateProgress notification failed:', err.message));
+            if (borrowerUser) {
+                EventDispatcher.dispatch({
+                    eventType: (progress >= 1.0) ? NotificationEvents.LOAN_COMPLETED : NotificationEvents.PAYMENT_RECEIVED,
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    recipientUserId: borrowerUser._id,
+                    payload: {
+                        title: (progress >= 1.0) ? 'Loan Completed' : 'Loan Progress Updated',
+                        body: `Your lender has updated the repayment progress for your loan of ₹${loan.amount}.`,
+                        type: 'LOAN_PROGRESS_UPDATED',
+                        loanId: loan._id.toString()
+                    }
+                }).catch(err => console.error('[EventDispatcher] Failed:', err.message));
             }
         }
 
@@ -652,16 +664,23 @@ exports.verifyLenderOtp = async (req, res) => {
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
-        // Now trigger the Push Notification to the borrower
+        const EventDispatcher = require('../utils/EventDispatcher');
+        const NotificationEvents = require('../utils/NotificationEvents');
+
         const borrowerUser = await User.findOne({ id: loan.borrower });
-        if (borrowerUser && borrowerUser.fcmToken) {
-            const { sendPushNotification } = require('../utils/fcm');
-            sendPushNotification(
-                borrowerUser.fcmToken,
-                'New Agreement Request',
-                `${req.user.firstName || 'Someone'} has confirmed sending you a loan out for ₹${loan.amount}. Tap to review and accept via Digital Signature.`,
-                { type: 'LOAN_CREATED', loanId: loan._id.toString() }
-            ).catch(err => console.error('[Loans] FCM verifyLenderOtp notification failed:', err.message));
+        if (borrowerUser) {
+            EventDispatcher.dispatch({
+                eventType: NotificationEvents.AGREEMENT_READY,
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                recipientUserId: borrowerUser._id,
+                payload: {
+                    title: 'New Agreement Request',
+                    body: `${req.user.firstName || 'Someone'} has confirmed sending you a loan out for ₹${loan.amount}. Tap to review and accept via Digital Signature.`,
+                    type: 'LOAN_CREATED',
+                    loanId: loan._id.toString()
+                }
+            }).catch(err => console.error('[EventDispatcher] Failed:', err.message));
         }
 
         res.status(200).json({
@@ -723,12 +742,54 @@ exports.closeLoan = async (req, res) => {
             return res.status(400).json({ success: false, message: e.message });
         }
 
-        loan.status = 'closed';
-        loan.progress = 1.0;
-        await loan.save();
+        const EventDispatcher = require('../utils/EventDispatcher');
+        const NotificationEvents = require('../utils/NotificationEvents');
+        const { withTransaction } = require('../utils/dbTransaction');
 
-        intent.status = 'COMMITTED';
-        await intent.save();
+        // === ATOMIC BOUNDARY: close + outbox ===
+        await withTransaction(async (session) => {
+            const sessionLoan = await Loan.findById(loan._id).session(session);
+            sessionLoan.status = 'closed';
+            sessionLoan.progress = 1.0;
+            await sessionLoan.save({ session });
+
+            const sessionIntent = await TransactionIntent.findById(intent._id).session(session);
+            sessionIntent.status = 'COMMITTED';
+            await sessionIntent.save({ session });
+
+            // Dispatch to both lender and borrower (if exists)
+            const dispatchPromises = [
+                EventDispatcher.dispatch({
+                    eventType: NotificationEvents.LOAN_CLOSED,
+                    aggregateType: 'LOAN',
+                    aggregateId: sessionLoan._id.toString(),
+                    recipientUserId: req.user._id,
+                    payload: { title: 'Loan Closed', body: `Your loan of ₹${loan.amount} has been closed.`, type: 'LOAN_CLOSED', loanId: sessionLoan._id.toString() },
+                    idempotencyKey: `${intentId}_LENDER`,
+                    session
+                })
+            ];
+
+            if (sessionLoan.borrower) {
+                const BorrowerUser = require('../models/User');
+                const borrowerUser = await BorrowerUser.findOne({ id: sessionLoan.borrower }).session(session);
+                if (borrowerUser) {
+                    dispatchPromises.push(EventDispatcher.dispatch({
+                        eventType: NotificationEvents.LOAN_CLOSED,
+                        aggregateType: 'LOAN',
+                        aggregateId: sessionLoan._id.toString(),
+                        recipientUserId: borrowerUser._id,
+                        payload: { title: 'Loan Closed', body: `Your loan of ₹${loan.amount} has been closed.`, type: 'LOAN_CLOSED', loanId: sessionLoan._id.toString() },
+                        idempotencyKey: `${intentId}_BORROWER`,
+                        session
+                    }));
+                }
+            }
+            await Promise.all(dispatchPromises);
+
+            loan.status = 'closed';
+            loan.progress = 1.0;
+        }); // === END ATOMIC BOUNDARY ===
 
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
@@ -827,33 +888,66 @@ async function _handleCustomTransaction(req, res, actionType) {
         }
 
         const FinancialLedgerService = require('../services/FinancialLedgerService');
-        
+        const EventDispatcher = require('../utils/EventDispatcher');
+        const NotificationEvents = require('../utils/NotificationEvents');
+        const { withTransaction } = require('../utils/dbTransaction');
+
+        let savedLoan;
         let notifTitle = 'Transaction Complete', notifBody = '';
-        if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-            await FinancialLedgerService.recordPayment(loan, pa, intentId, req.user.id);
-            notifTitle = 'Payment Recorded';
-            notifBody = `Your lender recorded a payment of Rs.${pa / 100}. Remaining: Rs.${loan.totalPayablePaise / 100}.`;
-        } else if (actionType === 'addCredit') {
-            await FinancialLedgerService.addCredit(loan, pa, intentId, req.user.id);
-            notifTitle = 'Credit Added';
-            notifBody = `Your lender added Rs.${pa / 100}. Total payable: Rs.${loan.totalPayablePaise / 100}.`;
-        }
-        
-        await loan.save();
+
+        // === ATOMIC BOUNDARY: loan mutation + outbox insert in one session ===
+        await withTransaction(async (session) => {
+            // Re-fetch inside the session for clean session-bound document
+            const sessionLoan = await Loan.findById(loan._id).session(session);
+
+            if (actionType === 'recordPayment' || actionType === 'recordInterest') {
+                await FinancialLedgerService.recordPayment(sessionLoan, pa, intentId, req.user.id);
+                notifTitle = 'Payment Recorded';
+                notifBody = `Your lender recorded a payment of Rs.${pa / 100}. Remaining: Rs.${sessionLoan.totalPayablePaise / 100}.`;
+            } else if (actionType === 'addCredit') {
+                await FinancialLedgerService.addCredit(sessionLoan, pa, intentId, req.user.id);
+                notifTitle = 'Credit Added';
+                notifBody = `Your lender added Rs.${pa / 100}. Total payable: Rs.${sessionLoan.totalPayablePaise / 100}.`;
+            }
+
+            await sessionLoan.save({ session });
+            savedLoan = sessionLoan;
+
+            // Dispatch outbox inside the same session — atomically
+            if (sessionLoan.borrower) {
+                const BorrowerUser = require('../models/User');
+                const borrowerUser = await BorrowerUser.findOne({ id: sessionLoan.borrower }).session(session);
+                if (borrowerUser) {
+                    let eventType = NotificationEvents.PAYMENT_RECEIVED;
+                    if (actionType === 'addCredit') eventType = NotificationEvents.LOAN_RECEIVED;
+
+                    await EventDispatcher.dispatch({
+                        eventType,
+                        aggregateType: 'LOAN',
+                        aggregateId: sessionLoan._id.toString(),
+                        recipientUserId: borrowerUser._id,
+                        payload: {
+                            title: notifTitle,
+                            body: notifBody,
+                            type: 'LOAN_TRANSACTION',
+                            loanId: sessionLoan._id.toString()
+                        },
+                        idempotencyKey: intentId,
+                        session
+                    });
+                }
+            }
+        }); // === END ATOMIC BOUNDARY ===
+
         const { invalidateLoanCache } = require('../middleware/cache');
         await invalidateLoanCache(loan.lender, loan.borrower);
-        
+
         if (loan.borrower) {
             const { updateCreditScore } = require('../utils/creditScoreCalc');
             await updateCreditScore(loan.borrower);
-            const User = require('../models/User');
-            const borrowerUser = await User.findOne({ id: loan.borrower });
-            if (borrowerUser && borrowerUser.fcmToken) {
-                const { sendPushNotification } = require('../utils/fcm');
-                sendPushNotification(borrowerUser.fcmToken, notifTitle, notifBody, { type: 'LOAN_TRANSACTION', loanId: loan._id.toString() }).catch(()=>{});
-            }
         }
-        res.status(200).json({ success: true, loan });
+
+        res.status(200).json({ success: true, loan: savedLoan || loan });
     } catch (err) {
         console.error('[Loans] customTransaction Error:', err.message);
         res.status(500).json({ success: false, message: err.message });

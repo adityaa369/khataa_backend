@@ -7,7 +7,7 @@ const notificationOutboxSchema = new mongoose.Schema({
     aggregateId: { type: String, required: true },
     eventType: { type: String, required: true }, // e.g., 'PAYMENT_COMMITTED', 'EMAIL_VERIFICATION_REQUESTED'
     recipientUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    channel: { type: String, enum: ['PUSH', 'EMAIL', 'SMS'], required: true },
+    channel: { type: String, enum: ['PUSH', 'EMAIL', 'SMS', 'IN_APP'], required: true },
     
     payload: { type: mongoose.Schema.Types.Mixed, required: true }, // Safe, non-sensitive data
     

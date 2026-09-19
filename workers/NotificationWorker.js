@@ -65,8 +65,9 @@ class NotificationWorker {
             if (event.channel === 'PUSH') {
                 await this.processPush(event);
             } else if (event.channel === 'EMAIL') {
-                // Email logic here
-                await this.markSent(event);
+                await this.processEmail(event);
+            } else if (event.channel === 'IN_APP') {
+                await this.processInApp(event);
             } else {
                 throw new Error(`Unsupported channel: ${event.channel}`);
             }
@@ -115,6 +116,62 @@ class NotificationWorker {
             throw lastError; // All devices failed
         }
         
+        await this.markSent(event);
+    }
+
+    static async processEmail(event) {
+        const User = require('../models/User');
+        const user = await User.findById(event.recipientUserId);
+        
+        if (!user || !user.email) {
+            throw new PermanentError('User has no email address');
+        }
+
+        const { sendEmail } = require('../utils/email');
+        const { loanGivenTemplate } = require('../utils/emailTemplates');
+
+        let subject = event.payload.title;
+        let html = `<p>${event.payload.body}</p>`;
+
+        if (event.eventType === 'LOAN_ACTIVATED' && event.payload.amount) {
+            subject = `Credit Agreement Activated — ₹${event.payload.amount.toLocaleString('en-IN')}`;
+            html = loanGivenTemplate({
+                lenderName: event.payload.lenderName,
+                borrowerName: event.payload.borrowerName,
+                amount: event.payload.amount,
+                loanType: event.payload.loanType || 'Credit',
+                duration: event.payload.durationMonths,
+                interestRate: event.payload.interestRate || 0,
+                startDate: new Date(event.payload.startDate).toLocaleDateString('en-IN')
+            });
+        }
+
+        const result = await sendEmail({
+            to: user.email,
+            subject,
+            html,
+            text: event.payload.body
+        });
+
+        if (!result.success) {
+            throw new Error(result.error || 'Unknown Email Error');
+        }
+
+        await this.markSent(event);
+    }
+
+    static async processInApp(event) {
+        const Notification = require('../models/Notification');
+        await Notification.create({
+            userId: event.recipientUserId,
+            title: event.payload.title,
+            body: event.payload.body,
+            eventType: event.eventType,
+            type: event.payload.type || 'general',
+            referenceType: event.aggregateType,
+            referenceId: event.aggregateId,
+            data: event.payload
+        });
         await this.markSent(event);
     }
 

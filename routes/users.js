@@ -84,11 +84,24 @@ router.post('/fcm-token', async (req, res) => {
         if (!fcmToken) {
             return res.status(400).json({ success: false, message: 'Token required' });
         }
-        await User.findOneAndUpdate(
+        const userObj = await User.findOneAndUpdate(
             { id: req.user.id },
             { fcmToken },
             { new: true }
         );
+        if (userObj) {
+            const DeviceToken = require('../models/DeviceToken');
+            await DeviceToken.findOneAndUpdate(
+                { token: fcmToken },
+                {
+                    userId: userObj._id,
+                    token: fcmToken,
+                    lastSeenAt: new Date(),
+                    active: true
+                },
+                { upsert: true, new: true }
+            );
+        }
         res.status(200).json({ success: true, message: 'Token updated' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
