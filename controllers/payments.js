@@ -53,7 +53,7 @@ exports.initiatePayment = async (req, res) => {
         });
 
         // 1. Borrower Phone Lookup (Authoritative)
-        const borrower = await User.findById(loan.borrower);
+        const borrower = await User.findOne({ id: loan.borrower });
         if (!borrower || !borrower.phone) {
             return res.status(400).json({ success: false, message: 'Borrower phone number not found' });
         }
@@ -346,7 +346,7 @@ exports.resendPaymentOtp = async (req, res) => {
         );
 
         // 1. Borrower Phone Lookup (Authoritative)
-        const borrower = await User.findById(loan.borrower);
+        const borrower = await User.findOne({ id: loan.borrower });
         if (!borrower || !borrower.phone) {
             return res.status(400).json({ success: false, message: 'Borrower phone number not found' });
         }
