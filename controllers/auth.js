@@ -368,8 +368,20 @@ exports.verifyOtpMsg91 = async (req, res) => {
             );
         }
 
+        // Ensure legacy users have an id field
+        if (!user.id) {
+            user.id = crypto.randomUUID();
+            await user.save();
+        }
+
+        const jwt = require('jsonwebtoken');
+        const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+            expiresIn: '30d'
+        });
+
         res.status(200).json({
             success: true,
+            token,
             user
         });
     } catch (err) {
