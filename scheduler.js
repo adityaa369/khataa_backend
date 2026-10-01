@@ -7,8 +7,9 @@ const InterestAccrualWorker = require('./workers/InterestAccrualWorker');
 const NotificationWorker = require('./workers/NotificationWorker');
 const ReconciliationEngine = require('./workers/ReconciliationEngine');
 const OperationalStateMonitor = require('./workers/OperationalStateMonitor');
+const PaymentReminderWorker = require('./workers/PaymentReminderWorker');
 
-let isRunning = { interest: false, notification: false, reconciliation: false, monitor: false, backup: false };
+let isRunning = { interest: false, notification: false, reconciliation: false, monitor: false, backup: false, reminder: false };
 const intervals = [];
 
 async function connectDB() {
@@ -37,6 +38,22 @@ async function runInterestAccrualSafe() {
         fireAlert('WORKER_FAILED', 'HIGH', 'InterestAccrualWorker', { error: e.message, subsystem: 'scheduler' });
     } finally {
         isRunning.interest = false;
+    }
+}
+
+async function runReminderSafe() {
+    if (isRunning.reminder) return;
+    isRunning.reminder = true;
+    try {
+        const today = new Date();
+        logger.info(`[Scheduler] Triggering PaymentReminderWorker for ${today.toISOString()}`);
+        const result = await PaymentReminderWorker.runDailyReminders(today);
+        logger.info(`[Scheduler] PaymentReminderWorker completed: ${JSON.stringify(result)}`);
+    } catch (e) {
+        logger.error(`[Scheduler] PaymentReminderWorker failed: ${e.message}`);
+        fireAlert('WORKER_FAILED', 'HIGH', 'PaymentReminderWorker', { error: e.message, subsystem: 'scheduler' });
+    } finally {
+        isRunning.reminder = false;
     }
 }
 
@@ -101,6 +118,8 @@ async function start() {
     
     // Interest Accrual: Idempotent hourly check
     intervals.push(setInterval(runInterestAccrualSafe, 60 * 60 * 1000));
+    // Payment Reminders: Daily check
+    intervals.push(setInterval(runReminderSafe, 24 * 60 * 60 * 1000));
     // Notifications: 30 seconds
     intervals.push(setInterval(runNotificationSafe, 30 * 1000));
     // Reconciliation: Hourly check
@@ -112,6 +131,7 @@ async function start() {
 
     logger.info('[Scheduler] All schedules registered. Running initial ticks...');
     await runInterestAccrualSafe();
+    await runReminderSafe();
     await runReconciliationSafe();
     await runMonitorSafe();
     await runNotificationSafe();

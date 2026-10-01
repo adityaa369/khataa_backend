@@ -19,6 +19,7 @@ const {
 const { protect } = require('../middleware/auth');
 const { cacheMiddleware } = require('../middleware/cache');
 const { validateCreateLoan, validatePaymentAmount } = require('../middleware/validate');
+const { commitPayment, initiatePayment } = require('../controllers/payments');
 
 const router = express.Router();
 
@@ -36,9 +37,14 @@ router.post('/:id/close-otp', requestClosureOtp);
 router.post('/:id/close', closeLoan);
 router.post('/:id/resend-otp', resendLoanOtp);
 router.patch('/:id/progress', updateProgress);
+router.get('/:id/timeline', require('../controllers/loans').getRepaymentTimeline);
+router.get('/:id/interest-schedule', require('../controllers/loans').getInterestSchedule);
 
 // Custom Payments
 router.post('/:id/record-payment', validatePaymentAmount, recordPayment);
+router.post('/:id/payments/initiate', validatePaymentAmount, initiatePayment);
+router.post('/:id/payments/commit', commitPayment); // Two-stage OTP-authorized payment
+router.post('/:id/commit-payment', commitPayment); // Legacy fallback
 router.post('/:id/add-credit', validatePaymentAmount, addCredit);
 router.post('/:id/record-interest', validatePaymentAmount, recordInterest);
 

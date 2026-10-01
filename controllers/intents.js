@@ -1,6 +1,9 @@
 const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
 const TransactionIntent = require('../models/TransactionIntent');
+const OtpChallenge = require('../models/OtpChallenge');
 const Loan = require('../models/Loan');
+const EventDispatcher = require('../utils/EventDispatcher');
 
 exports.createIntent = async (req, res) => {
     try {
@@ -16,7 +19,7 @@ exports.createIntent = async (req, res) => {
                 return res.status(403).json({ success: false, message: 'Only the borrower can accept this loan' });
             }
         } else {
-            // Lender actions
+            // Lender actions (PAYMENT, ADD_CREDIT, CLOSE_LOAN)
             if (loan.lender.toString() !== req.user.id) {
                 return res.status(403).json({ success: false, message: 'Only the lender can perform this action' });
             }
@@ -52,6 +55,86 @@ exports.createIntent = async (req, res) => {
             status: 'PENDING',
             expiresAt
         });
+
+        // 5. PAYMENT-specific: Generate OTP challenge and notify borrower
+        if (action === 'PAYMENT') {
+            // Generate cryptographically secure 6-digit OTP
+            const otpPlaintext = crypto.randomInt(100000, 999999).toString();
+            const otpHash = await bcrypt.hash(otpPlaintext, 10);
+
+            // Invalidate any existing active challenges for this intent
+            await OtpChallenge.updateMany(
+                { intentId: intent.intentId, status: 'ACTIVE' },
+                { status: 'EXPIRED' }
+            );
+
+            // Create new challenge
+            await OtpChallenge.create({
+                intentId: intent.intentId,
+                otpHash,
+                borrowerUserId: loan.borrower.toString(),
+                lenderUserId: req.user.id,
+                loanId,
+                amountPaise: amountPaise || 0,
+                attemptsRemaining: 5,
+                status: 'ACTIVE'
+            });
+
+            // Send OTP to borrower via SILENT push notification
+            // IMPORTANT: This is NOT an in-app notification. The OTP is sent
+            // as a data-only push that the client displays as a system notification.
+            // It must NEVER be stored in NotificationOutbox (no in-app history).
+            try {
+                const User = require('../models/User');
+                const borrower = await User.findById(loan.borrower.toString());
+                if (borrower && borrower.fcmTokens && borrower.fcmTokens.length > 0) {
+                    const admin = require('firebase-admin');
+                    const amountRupees = ((amountPaise || 0) / 100).toFixed(2);
+                    
+                    // Send to all registered devices
+                    for (const tokenObj of borrower.fcmTokens) {
+                        const token = typeof tokenObj === 'string' ? tokenObj : tokenObj.token;
+                        if (!token) continue;
+                        try {
+                            await admin.messaging().send({
+                                token,
+                                notification: {
+                                    title: 'Payment Authorization Required',
+                                    body: `Enter OTP ${otpPlaintext} to authorize payment of ₹${amountRupees}`
+                                },
+                                data: {
+                                    type: 'PAYMENT_OTP',
+                                    intentId: intent.intentId,
+                                    loanId,
+                                    amountPaise: String(amountPaise || 0)
+                                },
+                                android: {
+                                    priority: 'high',
+                                    notification: { channelId: 'payment_auth' }
+                                }
+                            });
+                        } catch (fcmErr) {
+                            console.error('[Intents] FCM send failed for token:', fcmErr.message);
+                        }
+                    }
+                }
+            } catch (notifErr) {
+                console.error('[Intents] Failed to send OTP notification:', notifErr);
+                // Non-blocking — borrower can request resend
+            }
+
+            // Also dispatch an in-app notification (WITHOUT the OTP)
+            try {
+                await EventDispatcher.dispatch({
+                    eventType: 'PAYMENT_AUTHORIZATION_REQUESTED',
+                    recipientUserId: loan.borrower.toString(),
+                    data: { amountPaise: amountPaise || 0, lenderId: req.user.id },
+                    loanId
+                });
+            } catch (dispatchErr) {
+                console.error('[Intents] EventDispatcher failed:', dispatchErr);
+            }
+        }
         
         res.status(201).json({ success: true, intentId: intent.intentId, expiresAt: intent.expiresAt });
     } catch (err) {
@@ -84,3 +167,4 @@ exports.getIntent = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
+

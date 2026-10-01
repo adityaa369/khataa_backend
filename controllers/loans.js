@@ -1008,3 +1008,47 @@ exports.getPortfolioSummary = async (req, res) => {
     }
 };
 
+const { generateRepaymentTimeline } = require('../utils/repaymentSchedule');
+
+exports.getRepaymentTimeline = async (req, res) => {
+    try {
+        const loan = await Loan.findById(req.params.id);
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        
+        const isLender = loan.lender && (loan.lender.toString() === req.user.id);
+        const isBorrower = loan.borrower && (loan.borrower.toString() === req.user.id);
+                           
+        if (!isLender && !isBorrower) {
+            return res.status(403).json({ success: false, message: 'Not authorized to view this loan' });
+        }
+
+        const timeline = generateRepaymentTimeline(loan);
+        
+        res.status(200).json({ success: true, ...timeline });
+    } catch (err) {
+        console.error('[Loans] getRepaymentTimeline Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+exports.getInterestSchedule = async (req, res) => {
+    try {
+        const loan = await Loan.findById(req.params.id);
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        
+        const isLender = loan.lender && (loan.lender.toString() === req.user.id);
+        const isBorrower = loan.borrower && (loan.borrower.toString() === req.user.id);
+                           
+        if (!isLender && !isBorrower) {
+            return res.status(403).json({ success: false, message: 'Not authorized to view this loan' });
+        }
+
+        const { generateInterestSchedule } = require('../utils/repaymentSchedule');
+        const schedule = generateInterestSchedule(loan);
+        
+        res.status(200).json({ success: true, ...schedule });
+    } catch (err) {
+        console.error('[Loans] getInterestSchedule Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
