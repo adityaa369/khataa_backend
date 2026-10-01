@@ -19,7 +19,7 @@ const {
 const { protect } = require('../middleware/auth');
 const { cacheMiddleware } = require('../middleware/cache');
 const { validateCreateLoan, validatePaymentAmount } = require('../middleware/validate');
-const { commitPayment, initiatePayment, resendPaymentOtp } = require('../controllers/payments');
+const { commitPayment, initiatePayment, authorizeFirebasePhonePayment } = require('../controllers/payments');
 
 const router = express.Router();
 
@@ -43,7 +43,8 @@ router.get('/:id/interest-schedule', require('../controllers/loans').getInterest
 // Custom Payments
 router.post('/:id/record-payment', validatePaymentAmount, recordPayment);
 router.post('/:id/payments/initiate', validatePaymentAmount, initiatePayment);
-router.post('/:id/payments/intents/:intentId/resend', resendPaymentOtp);
+router.post('/:id/payments/intents/:intentId/authorize-firebase-phone', authorizeFirebasePhonePayment);
+
 router.post('/:id/payments/commit', commitPayment); // Two-stage OTP-authorized payment
 router.post('/:id/commit-payment', commitPayment); // Legacy fallback
 router.post('/:id/add-credit', validatePaymentAmount, addCredit);

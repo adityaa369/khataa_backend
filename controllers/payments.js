@@ -58,49 +58,7 @@ exports.initiatePayment = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Borrower phone number not found' });
         }
 
-        // 2. Cryptographically Secure OTP Generation
-        const rawOtp = crypto.randomInt(100000, 999999).toString();
-        const otpHash = await bcrypt.hash(rawOtp, 10);
-
-        await OtpChallenge.create({
-            intentId,
-            otpHash,
-            borrowerUserId: loan.borrower.toString(),
-            lenderUserId: loan.lender.toString(),
-            loanId: loan._id.toString(),
-            amountPaise,
-            attemptsRemaining: 5,
-            status: 'ACTIVE'
-        });
-
-        // 3. Dispatch to SMS Outbox exclusively (Bypasses ordinary preferences)
-        // We use symmetric encryption so the worker can securely read the OTP.
-        try {
-            const encryptedOtp = EncryptionUtil.encrypt(rawOtp);
-            await EventDispatcher.dispatch({
-                eventType: 'PAYMENT_OTP_SMS',
-                aggregateType: 'PAYMENT_INTENT',
-                aggregateId: intentId,
-                recipientUserId: loan.borrower.toString(),
-                channels: ['SMS'],
-                payload: {
-                    phone: borrower.phone,
-                    encryptedOtp: encryptedOtp,
-                    amountPaise: amountPaise,
-                    loanId: loan._id.toString(),
-                    intentId: intentId
-                },
-                idempotencyKey: intentId
-            });
-        } catch (e) {
-            console.error('[InitiatePayment] SMS Dispatch failed:', e.message);
-        }
-
-        res.status(201).json({
-            success: true,
-            intentId,
-            message: 'Payment intent created. OTP sent to borrower.'
-        });
+        res.status(201).json({ success: true, intentId, borrowerPhone: borrower.phone });
     } catch (err) {
         console.error('[InitiatePayment] Error:', err);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -312,88 +270,115 @@ exports.commitPayment = async (req, res) => {
 };
 
 
-// @desc    Resend OTP for Payment Intent
-// @route   POST /api/loans/:id/payments/intents/:intentId/resend
+
+
+// @desc    Authorize payment using secondary Firebase Phone Auth
+// @route   POST /api/loans/:id/payments/intents/:intentId/authorize-firebase-phone
 // @access  Private (Lender)
-exports.resendPaymentOtp = async (req, res) => {
+exports.authorizeFirebasePhonePayment = async (req, res) => {
     try {
         const { id: loanId, intentId } = req.params;
+        const { firebaseIdToken } = req.body;
+
+        if (!firebaseIdToken) {
+            return res.status(400).json({ success: false, message: 'Missing firebaseIdToken' });
+        }
 
         const loan = await Loan.findById(loanId);
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
         
         if (loan.lender.toString() !== req.user.id) {
-            return res.status(403).json({ success: false, message: 'Only lender can resend payment OTP' });
+            return res.status(403).json({ success: false, message: 'Only lender can authorize payment' });
         }
 
         const intent = await TransactionIntent.findOne({ intentId, loanId: loan._id });
         if (!intent) return res.status(404).json({ success: false, message: 'Payment intent not found' });
 
         if (intent.status !== 'PENDING' || intent.expiresAt < new Date()) {
-            return res.status(400).json({ success: false, message: 'Payment intent is not active' });
+            return res.status(400).json({ success: false, message: 'Payment intent is not active or has expired' });
         }
 
-        // Rate limiting check (e.g. cooldown of 60 seconds)
-        const recentChallenge = await OtpChallenge.findOne({ intentId }).sort({ createdAt: -1 });
-        if (recentChallenge && (Date.now() - recentChallenge.createdAt.getTime() < 60000)) {
-            return res.status(429).json({ success: false, message: 'Please wait 60 seconds before resending OTP' });
-        }
+        const amountPaise = intent.payload.amountPaise;
+        FinancialLedgerService.deriveBalances(loan);
+        const totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
 
-        // Invalidate old challenges
-        await OtpChallenge.updateMany(
-            { intentId, status: 'ACTIVE' },
-            { $set: { status: 'EXPIRED' } }
-        );
-
-        // 1. Borrower Phone Lookup (Authoritative)
-        const borrower = await User.findOne({ id: loan.borrower });
-        if (!borrower || !borrower.phone) {
-            return res.status(400).json({ success: false, message: 'Borrower phone number not found' });
-        }
-
-        // 2. Cryptographically Secure OTP Generation
-        const rawOtp = crypto.randomInt(100000, 999999).toString();
-        const otpHash = await bcrypt.hash(rawOtp, 10);
-
-        await OtpChallenge.create({
-            intentId,
-            otpHash,
-            borrowerUserId: loan.borrower.toString(),
-            lenderUserId: loan.lender.toString(),
-            loanId: loan._id.toString(),
-            amountPaise: intent.payload.amountPaise,
-            attemptsRemaining: 5,
-            status: 'ACTIVE'
-        });
-
-        // 3. Dispatch to SMS Outbox exclusively
-        try {
-            const encryptedOtp = EncryptionUtil.encrypt(rawOtp);
-            await EventDispatcher.dispatch({
-                eventType: 'PAYMENT_OTP_SMS_RESEND',
-                aggregateType: 'PAYMENT_INTENT',
-                aggregateId: intentId,
-                recipientUserId: loan.borrower.toString(),
-                channels: ['SMS'],
-                payload: {
-                    phone: borrower.phone,
-                    encryptedOtp: encryptedOtp,
-                    amountPaise: intent.payload.amountPaise,
-                    loanId: loan._id.toString(),
-                    intentId: intentId
-                },
-                idempotencyKey: intentId + '_' + Date.now()
+        if (amountPaise > totalOutstandingPaise) {
+            await TransactionIntent.updateOne({ intentId }, { status: 'REJECTED' });
+            return res.status(400).json({
+                success: false,
+                code: 'OVERPAYMENT_REJECTED',
+                message: 'Payment exceeds outstanding balance.'
             });
-        } catch (e) {
-            console.error('[ResendOTP] SMS Dispatch failed:', e.message);
         }
 
-        res.status(200).json({
-            success: true,
-            message: 'A new OTP has been sent to the borrower.'
-        });
+        let decodedToken;
+        try {
+            const admin = require('../config/firebase');
+            if (!admin.apps || !admin.apps.length) {
+                throw new Error('Firebase Admin SDK not initialized');
+            }
+            decodedToken = await admin.auth().verifyIdToken(firebaseIdToken);
+        } catch (err) {
+            console.error('[AuthorizeFirebasePhone] Token verification failed:', err.message);
+            return res.status(401).json({ success: false, message: 'Invalid or expired Firebase ID token' });
+        }
+
+        const borrowerFirebaseUid = decodedToken.uid;
+        const borrower = await User.findOne({ id: loan.borrower });
+        
+        if (!borrower || borrower.firebaseUid !== borrowerFirebaseUid) {
+            return res.status(403).json({ success: false, message: 'OTP verified by wrong user/phone' });
+        }
+
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        let result;
+        try {
+            const lockedIntent = await TransactionIntent.findOneAndUpdate(
+                { intentId, status: 'PENDING' },
+                { status: 'COMMITTED' },
+                { session, new: true }
+            );
+
+            if (!lockedIntent) {
+                throw new Error('INTENT_ALREADY_CONSUMED');
+            }
+
+            result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id);
+            await loan.save({ session });
+            await session.commitTransaction();
+        } catch (err) {
+            await session.abortTransaction();
+            console.error('[AuthorizeFirebasePhone] Transaction aborted:', err);
+            if (err.message === 'INTENT_ALREADY_CONSUMED') {
+                return res.status(409).json({ success: false, message: 'Payment already processed' });
+            }
+            return res.status(500).json({ success: false, message: 'Payment execution failed', error: err.message });
+        } finally {
+            session.endSession();
+        }
+
+        try {
+            await EventDispatcher.dispatch({
+                eventType: 'PAYMENT_RECEIVED',
+                recipientUserId: req.user.id, 
+                data: { amountPaise, borrowerId: loan.borrower },
+                loanId
+            });
+            await EventDispatcher.dispatch({
+                eventType: 'PAYMENT_MADE',
+                recipientUserId: loan.borrower, 
+                data: { amountPaise },
+                loanId
+            });
+        } catch (notifErr) {
+            console.error('[AuthorizeFirebasePhone] Notification dispatch failed:', notifErr);
+        }
+
+        const updatedLoan = await Loan.findById(loanId);
+        res.status(200).json({ success: true, loan: updatedLoan });
     } catch (err) {
-        console.error('[ResendOTP] Error:', err);
-        res.status(500).json({ success: false, message: 'Server Error' });
+        console.error('[AuthorizeFirebasePhone] Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
     }
 };
