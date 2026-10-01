@@ -230,6 +230,9 @@ exports.commitPayment = async (req, res) => {
             await TransactionIntent.updateOne({ intentId }, { status: 'COMMITTED' }, { session });
 
             await session.commitTransaction();
+
+            const { invalidateLoanCache } = require('../middleware/cache');
+            await invalidateLoanCache(loan.lender.toString(), loan.borrower.toString());
         } catch (err) {
             await session.abortTransaction();
             console.error('[CommitPayment] Transaction aborted:', err);
