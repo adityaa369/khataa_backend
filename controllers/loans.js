@@ -996,11 +996,13 @@ exports.getPortfolioSummary = async (req, res) => {
         
         res.status(200).json({
             success: true,
-            loanCount,
-            activeLoanCount,
-            totalLentPaise,
-            totalCollectedPaise,
-            outstandingPaise
+            data: {
+                loanCount,
+                activeLoanCount,
+                totalLentPaise,
+                totalCollectedPaise,
+                outstandingPaise
+            }
         });
     } catch (err) {
         console.error('[Loans] getPortfolioSummary Error:', err.message);

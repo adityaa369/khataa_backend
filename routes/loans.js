@@ -37,7 +37,7 @@ router.post('/:id/close-otp', requestClosureOtp);
 router.post('/:id/close', closeLoan);
 router.post('/:id/resend-otp', resendLoanOtp);
 router.patch('/:id/progress', updateProgress);
-router.get('/:id/timeline', require('../controllers/loans').getRepaymentTimeline);
+router.get('/:id/repayment-timeline', require('../controllers/loans').getRepaymentTimeline);
 router.get('/:id/interest-schedule', require('../controllers/loans').getInterestSchedule);
 
 // Custom Payments

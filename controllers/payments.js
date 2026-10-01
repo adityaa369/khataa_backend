@@ -27,8 +27,8 @@ exports.initiatePayment = async (req, res) => {
             return res.status(400).json({ success: false, code: 'TERMINAL_STATE', message: 'Loan is in terminal state' });
         }
 
-        const balances = FinancialLedgerService.deriveBalances(loan);
-        const totalOutstandingPaise = balances.totalOutstandingPaise || 0;
+        FinancialLedgerService.deriveBalances(loan);
+        const totalOutstandingPaise = loan.totalPayablePaise || 0;
         if (amountPaise > totalOutstandingPaise) {
             return res.status(400).json({
                 success: false,
@@ -229,8 +229,8 @@ exports.commitPayment = async (req, res) => {
 
         // 7. Overpayment check (same as existing recordPayment)
         const amountPaise = intent.payload.amountPaise;
-        const balances = FinancialLedgerService.deriveBalances(loan);
-        const totalOutstandingPaise = balances.totalOutstandingPaise || 0;
+        FinancialLedgerService.deriveBalances(loan);
+        const totalOutstandingPaise = loan.totalPayablePaise || 0;
 
         if (amountPaise > totalOutstandingPaise) {
             await TransactionIntent.updateOne({ intentId }, { status: 'REJECTED' });
