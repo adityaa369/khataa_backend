@@ -216,7 +216,7 @@ exports.commitPayment = async (req, res) => {
                 { $inc: { attemptsRemaining: -1 } }
             );
             const remaining = challenge.attemptsRemaining - 1;
-            return res.status(401).json({
+            return res.status(400).json({
                 success: false,
                 code: 'OTP_INVALID',
                 message: `Invalid OTP. ${remaining} attempt(s) remaining.`,
