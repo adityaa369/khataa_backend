@@ -5,11 +5,12 @@ const { fireAlert } = require('./utils/AlertManager');
 
 const InterestAccrualWorker = require('./workers/InterestAccrualWorker');
 const NotificationWorker = require('./workers/NotificationWorker');
+const SmsWorker = require('./workers/SmsWorker');
 const ReconciliationEngine = require('./workers/ReconciliationEngine');
 const OperationalStateMonitor = require('./workers/OperationalStateMonitor');
 const PaymentReminderWorker = require('./workers/PaymentReminderWorker');
 
-let isRunning = { interest: false, notification: false, reconciliation: false, monitor: false, backup: false, reminder: false };
+let isRunning = { interest: false, notification: false, sms: false, reconciliation: false, monitor: false, backup: false, reminder: false };
 const intervals = [];
 
 async function connectDB() {
@@ -70,6 +71,19 @@ async function runNotificationSafe() {
     }
 }
 
+async function runSmsSafe() {
+    if (isRunning.sms) return;
+    isRunning.sms = true;
+    try {
+        await SmsWorker.processSmsOutbox();
+    } catch (e) {
+        logger.error(`[Scheduler] SmsWorker failed: ${e.message}`);
+        fireAlert('WORKER_FAILED', 'MEDIUM', 'SmsWorker', { error: e.message, subsystem: 'scheduler' });
+    } finally {
+        isRunning.sms = false;
+    }
+}
+
 async function runReconciliationSafe() {
     if (isRunning.reconciliation) return;
     isRunning.reconciliation = true;
@@ -122,6 +136,8 @@ async function start() {
     intervals.push(setInterval(runReminderSafe, 24 * 60 * 60 * 1000));
     // Notifications: 30 seconds
     intervals.push(setInterval(runNotificationSafe, 30 * 1000));
+    // SMS Worker: 10 seconds (Transactional speed priority)
+    intervals.push(setInterval(runSmsSafe, 10 * 1000));
     // Reconciliation: Hourly check
     intervals.push(setInterval(runReconciliationSafe, 60 * 60 * 1000));
     // Operational Monitor: 5 minutes
@@ -135,6 +151,7 @@ async function start() {
     await runReconciliationSafe();
     await runMonitorSafe();
     await runNotificationSafe();
+    await runSmsSafe();
 }
 
 start();

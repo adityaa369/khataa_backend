@@ -3,9 +3,11 @@ const bcrypt = require('bcryptjs');
 const TransactionIntent = require('../models/TransactionIntent');
 const OtpChallenge = require('../models/OtpChallenge');
 const Loan = require('../models/Loan');
+const User = require('../models/User');
 const FinancialLedgerService = require('../services/FinancialLedgerService');
 const mongoose = require('mongoose');
 const EventDispatcher = require('../utils/EventDispatcher');
+const EncryptionUtil = require('../utils/encryption');
 const admin = require('firebase-admin');
 
 exports.initiatePayment = async (req, res) => {
@@ -50,7 +52,14 @@ exports.initiatePayment = async (req, res) => {
             expiresAt: new Date(Date.now() + 5 * 60000)
         });
 
-        const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+        // 1. Borrower Phone Lookup (Authoritative)
+        const borrower = await User.findById(loan.borrower);
+        if (!borrower || !borrower.phone) {
+            return res.status(400).json({ success: false, message: 'Borrower phone number not found' });
+        }
+
+        // 2. Cryptographically Secure OTP Generation
+        const rawOtp = crypto.randomInt(100000, 999999).toString();
         const otpHash = await bcrypt.hash(rawOtp, 10);
 
         await OtpChallenge.create({
@@ -64,21 +73,27 @@ exports.initiatePayment = async (req, res) => {
             status: 'ACTIVE'
         });
 
+        // 3. Dispatch to SMS Outbox exclusively (Bypasses ordinary preferences)
+        // We use symmetric encryption so the worker can securely read the OTP.
         try {
+            const encryptedOtp = EncryptionUtil.encrypt(rawOtp);
             await EventDispatcher.dispatch({
-                eventType: 'PAYMENT_OTP',
+                eventType: 'PAYMENT_OTP_SMS',
+                aggregateType: 'PAYMENT_INTENT',
+                aggregateId: intentId,
                 recipientUserId: loan.borrower.toString(),
-                data: { amountPaise, intentId },
+                channels: ['SMS'],
                 payload: {
-                    title: 'Payment Authorization',
-                    body: `OTP to authorize payment of ₹${(amountPaise/100).toFixed(2)} is ${rawOtp}`,
-                    type: 'PAYMENT_OTP',
-                    loanId: loan._id.toString()
+                    phone: borrower.phone,
+                    encryptedOtp: encryptedOtp,
+                    amountPaise: amountPaise,
+                    loanId: loan._id.toString(),
+                    intentId: intentId
                 },
-                loanId: loan._id.toString()
+                idempotencyKey: intentId
             });
         } catch (e) {
-            console.error('[InitiatePayment] Notification failed:', e.message);
+            console.error('[InitiatePayment] SMS Dispatch failed:', e.message);
         }
 
         res.status(201).json({
@@ -296,3 +311,89 @@ exports.commitPayment = async (req, res) => {
     }
 };
 
+
+// @desc    Resend OTP for Payment Intent
+// @route   POST /api/loans/:id/payments/intents/:intentId/resend
+// @access  Private (Lender)
+exports.resendPaymentOtp = async (req, res) => {
+    try {
+        const { id: loanId, intentId } = req.params;
+
+        const loan = await Loan.findById(loanId);
+        if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
+        
+        if (loan.lender.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Only lender can resend payment OTP' });
+        }
+
+        const intent = await TransactionIntent.findOne({ intentId, loanId: loan._id });
+        if (!intent) return res.status(404).json({ success: false, message: 'Payment intent not found' });
+
+        if (intent.status !== 'PENDING' || intent.expiresAt < new Date()) {
+            return res.status(400).json({ success: false, message: 'Payment intent is not active' });
+        }
+
+        // Rate limiting check (e.g. cooldown of 60 seconds)
+        const recentChallenge = await OtpChallenge.findOne({ intentId }).sort({ createdAt: -1 });
+        if (recentChallenge && (Date.now() - recentChallenge.createdAt.getTime() < 60000)) {
+            return res.status(429).json({ success: false, message: 'Please wait 60 seconds before resending OTP' });
+        }
+
+        // Invalidate old challenges
+        await OtpChallenge.updateMany(
+            { intentId, status: 'ACTIVE' },
+            { $set: { status: 'EXPIRED' } }
+        );
+
+        // 1. Borrower Phone Lookup (Authoritative)
+        const borrower = await User.findById(loan.borrower);
+        if (!borrower || !borrower.phone) {
+            return res.status(400).json({ success: false, message: 'Borrower phone number not found' });
+        }
+
+        // 2. Cryptographically Secure OTP Generation
+        const rawOtp = crypto.randomInt(100000, 999999).toString();
+        const otpHash = await bcrypt.hash(rawOtp, 10);
+
+        await OtpChallenge.create({
+            intentId,
+            otpHash,
+            borrowerUserId: loan.borrower.toString(),
+            lenderUserId: loan.lender.toString(),
+            loanId: loan._id.toString(),
+            amountPaise: intent.payload.amountPaise,
+            attemptsRemaining: 5,
+            status: 'ACTIVE'
+        });
+
+        // 3. Dispatch to SMS Outbox exclusively
+        try {
+            const encryptedOtp = EncryptionUtil.encrypt(rawOtp);
+            await EventDispatcher.dispatch({
+                eventType: 'PAYMENT_OTP_SMS_RESEND',
+                aggregateType: 'PAYMENT_INTENT',
+                aggregateId: intentId,
+                recipientUserId: loan.borrower.toString(),
+                channels: ['SMS'],
+                payload: {
+                    phone: borrower.phone,
+                    encryptedOtp: encryptedOtp,
+                    amountPaise: intent.payload.amountPaise,
+                    loanId: loan._id.toString(),
+                    intentId: intentId
+                },
+                idempotencyKey: intentId + '_' + Date.now()
+            });
+        } catch (e) {
+            console.error('[ResendOTP] SMS Dispatch failed:', e.message);
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'A new OTP has been sent to the borrower.'
+        });
+    } catch (err) {
+        console.error('[ResendOTP] Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
