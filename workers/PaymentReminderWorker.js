@@ -1,11 +1,11 @@
-﻿const Loan = require('../models/Loan');
+const Loan = require('../models/Loan');
 const EventDispatcher = require('../utils/EventDispatcher');
 const logger = require('../utils/logger');
 const { generateRepaymentTimeline } = require('../utils/repaymentSchedule');
 
 class PaymentReminderWorker {
     static async runDailyReminders(currentDate = new Date()) {
-        logger.info(\[PaymentReminderWorker] Starting daily reminder run for \\);
+        logger.info(`[PaymentReminderWorker] Starting daily reminder run for ${currentDate.toISOString()}`);
         
         let reminderCount = 0;
 
@@ -33,16 +33,16 @@ class PaymentReminderWorker {
                 else if (diffDays === -7) nudgeType = 'overdue_7';
 
                 if (nudgeType) {
-                    const deterministicEventId = \PAYMENT_NUDGE-\-period\-\\;
+                    const deterministicEventId = `PAYMENT_NUDGE-${loan._id}-period${currentPeriod.periodIndex}-${nudgeType}`;
                     
                     try {
                         const amountRupees = ((currentPeriod.expectedAmountPaise || 0) / 100).toFixed(2);
                         let title = 'Payment Due Soon';
-                        let body = \Your payment of ₹\ for month \ is due in \ days.\;
+                        let body = `Your payment of ₹${amountRupees} for month ${currentPeriod.periodIndex} is due in ${diffDays} days.`;
                         
                         if (diffDays < 0) {
                             title = 'Payment Overdue';
-                            body = \Your payment of ₹\ for month \ is overdue.\;
+                            body = `Your payment of ₹${amountRupees} for month ${currentPeriod.periodIndex} is overdue.`;
                         }
 
                         // EventDispatcher automatically handles idempotency and suppresses duplicates!
@@ -59,7 +59,7 @@ class PaymentReminderWorker {
                                 loanId: loan._id.toString(),
                                 periodIndex: String(currentPeriod.periodIndex),
                                 amountPaise: String(currentPeriod.expectedAmountPaise),
-                                deepLink: \khaata://loans/\\
+                                deepLink: `khaata://loans/${loan._id}`
                             }
                         });
 
@@ -73,15 +73,15 @@ class PaymentReminderWorker {
                             await loan.save();
                         }
                     } catch (e) {
-                        logger.error(\[PaymentReminderWorker] Failed to process reminder for loan \: \\);
+                        logger.error(`[PaymentReminderWorker] Failed to process reminder for loan ${loan._id}: ${e.message}`);
                     }
                 }
             }
 
-            logger.info(\[PaymentReminderWorker] Completed daily reminder run. Dispatched \ reminders.\);
+            logger.info(`[PaymentReminderWorker] Completed daily reminder run. Dispatched ${reminderCount} reminders.`);
             return { success: true, remindersSent: reminderCount };
         } catch (e) {
-            logger.error(\[PaymentReminderWorker] Fatal error: \\);
+            logger.error(`[PaymentReminderWorker] Fatal error: ${e.message}`);
             throw e;
         }
     }
