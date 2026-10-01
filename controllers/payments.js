@@ -33,11 +33,11 @@ exports.initiatePayment = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 code: 'OVERPAYMENT_REJECTED',
-                message: \Payment of ?\ exceeds outstanding balance of ?\\
+                message: `Payment of ₹${(amountPaise/100).toFixed(2)} exceeds outstanding balance of ₹${(totalOutstandingPaise/100).toFixed(2)}`
             });
         }
 
-        const intentId = \intent_\\;
+        const intentId = `intent_${crypto.randomUUID()}`;
         
         await TransactionIntent.create({
             intentId,
@@ -70,7 +70,7 @@ exports.initiatePayment = async (req, res) => {
                 data: { amountPaise, intentId },
                 payload: {
                     title: 'Payment Authorization',
-                    body: \OTP to authorize payment of ?\ is \\,
+                    body: `OTP to authorize payment of ₹${(amountPaise/100).toFixed(2)} is ${rawOtp}`,
                     type: 'PAYMENT_OTP',
                     loanId: loan._id.toString()
                 },

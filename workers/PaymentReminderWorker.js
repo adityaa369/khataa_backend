@@ -1,4 +1,4 @@
-const Loan = require('../models/Loan');
+﻿const Loan = require('../models/Loan');
 const EventDispatcher = require('../utils/EventDispatcher');
 const logger = require('../utils/logger');
 const { generateRepaymentTimeline } = require('../utils/repaymentSchedule');
@@ -38,11 +38,11 @@ class PaymentReminderWorker {
                     try {
                         const amountRupees = ((currentPeriod.expectedAmountPaise || 0) / 100).toFixed(2);
                         let title = 'Payment Due Soon';
-                        let body = \Your payment of ?\ for month \ is due in \ days.\;
+                        let body = \Your payment of ₹\ for month \ is due in \ days.\;
                         
                         if (diffDays < 0) {
                             title = 'Payment Overdue';
-                            body = \Your payment of ?\ for month \ is overdue.\;
+                            body = \Your payment of ₹\ for month \ is overdue.\;
                         }
 
                         // EventDispatcher automatically handles idempotency and suppresses duplicates!
