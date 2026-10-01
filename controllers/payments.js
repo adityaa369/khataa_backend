@@ -231,8 +231,8 @@ exports.commitPayment = async (req, res) => {
 
             await session.commitTransaction();
 
-            const { invalidateLoanCache } = require('../middleware/cache');
-            await invalidateLoanCache(loan.lender.toString(), loan.borrower.toString());
+            
+            
         } catch (err) {
             await session.abortTransaction();
             console.error('[CommitPayment] Transaction aborted:', err);
@@ -350,6 +350,9 @@ exports.authorizeFirebasePhonePayment = async (req, res) => {
             result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id);
             await loan.save({ session });
             await session.commitTransaction();
+
+            const { invalidateLoanCache } = require('../middleware/cache');
+            await invalidateLoanCache(loan.lender.toString(), loan.borrower.toString());
         } catch (err) {
             await session.abortTransaction();
             console.error('[AuthorizeFirebasePhone] Transaction aborted:', err);
