@@ -4,6 +4,7 @@ const TransactionIntent = require('../models/TransactionIntent');
 const OtpChallenge = require('../models/OtpChallenge');
 const Loan = require('../models/Loan');
 const FinancialLedgerService = require('../services/FinancialLedgerService');
+const mongoose = require('mongoose');
 const EventDispatcher = require('../utils/EventDispatcher');
 const admin = require('firebase-admin');
 
@@ -28,7 +29,7 @@ exports.initiatePayment = async (req, res) => {
         }
 
         FinancialLedgerService.deriveBalances(loan);
-        const totalOutstandingPaise = loan.totalPayablePaise || 0;
+        const totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
         if (amountPaise > totalOutstandingPaise) {
             return res.status(400).json({
                 success: false,
@@ -224,13 +225,10 @@ exports.commitPayment = async (req, res) => {
             });
         }
 
-        // 6. OTP valid — consume challenge and intent
-        await OtpChallenge.updateOne({ _id: challenge._id }, { status: 'CONSUMED' });
-
-        // 7. Overpayment check (same as existing recordPayment)
+        // 6. Overpayment check before transaction
         const amountPaise = intent.payload.amountPaise;
         FinancialLedgerService.deriveBalances(loan);
-        const totalOutstandingPaise = loan.totalPayablePaise || 0;
+        const totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
 
         if (amountPaise > totalOutstandingPaise) {
             await TransactionIntent.updateOne({ intentId }, { status: 'REJECTED' });
@@ -241,28 +239,40 @@ exports.commitPayment = async (req, res) => {
             });
         }
 
-        // 8. Execute payment via FROZEN FinancialLedgerService
-        const result = await FinancialLedgerService.recordPayment(loan, amountPaise, {
-            type: 'PAYMENT',
-            initiatedBy: intent.userId, // lender who initiated
-            authorizedBy: req.user.id,  // borrower who authorized
-            intentId: intentId
-        });
-
-        // 9. Mark intent as committed
-        await TransactionIntent.updateOne({ intentId }, { status: 'COMMITTED' });
-
-        // 10. Dispatch notifications
+        // 7. Atomic Execution
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        let result;
         try {
-            // Notify lender: payment was authorized and recorded
+            // Consume challenge
+            await OtpChallenge.updateOne({ _id: challenge._id }, { status: 'CONSUMED' }, { session });
+
+            // Execute payment via FROZEN FinancialLedgerService
+            result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id);
+            
+            // Fix: Actually save the loan inside the transaction!
+            await loan.save({ session });
+
+            // Mark intent as committed
+            await TransactionIntent.updateOne({ intentId }, { status: 'COMMITTED' }, { session });
+
+            await session.commitTransaction();
+        } catch (err) {
+            await session.abortTransaction();
+            console.error('[CommitPayment] Transaction aborted:', err);
+            return res.status(500).json({ success: false, message: 'Payment execution failed', error: err.message });
+        } finally {
+            session.endSession();
+        }
+
+        // 8. Dispatch notifications (outside transaction)
+        try {
             await EventDispatcher.dispatch({
                 eventType: 'PAYMENT_RECEIVED',
                 recipientUserId: intent.userId, // lender
                 data: { amountPaise, borrowerId: req.user.id },
                 loanId
             });
-
-            // Notify borrower: payment confirmed
             await EventDispatcher.dispatch({
                 eventType: 'PAYMENT_MADE',
                 recipientUserId: req.user.id, // borrower
@@ -271,15 +281,13 @@ exports.commitPayment = async (req, res) => {
             });
         } catch (notifErr) {
             console.error('[CommitPayment] Notification dispatch failed:', notifErr);
-            // Non-blocking — payment already recorded
         }
 
         // 11. Return updated loan
         const updatedLoan = await Loan.findById(loanId);
         res.status(200).json({
             success: true,
-            loan: updatedLoan,
-            allocations: result.allocations
+            loan: updatedLoan
         });
 
     } catch (err) {
