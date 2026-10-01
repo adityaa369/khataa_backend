@@ -7,8 +7,11 @@ exports.generateRepaymentTimeline = (loan) => {
     }
 
     const durationMonths = loan.durationMonths;
-    const balances = FinancialLedgerService.deriveBalances(loan);
-    const emiAmount = Math.ceil((balances.totalPayablePaise || 0) / durationMonths);
+    FinancialLedgerService.deriveBalances(loan);
+    
+    // EMI should be constant based on original principal
+    const originalPrincipal = loan.amountPaise || (loan.amount * 100) || 0;
+    const emiAmount = Math.ceil(originalPrincipal / durationMonths);
     
     const timeline = [];
     let periodStart = new Date(startDate);
@@ -18,8 +21,8 @@ exports.generateRepaymentTimeline = (loan) => {
         .filter(t => t.type === 'payment')
         .sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt));
     
-    let remainingToAllocate = balances.totalPaidPaise || 0;
-    const totalOutstanding = balances.totalOutstandingPaise || 0;
+    let remainingToAllocate = loan.paidAmountPaise || 0;
+    const totalOutstanding = loan.totalPayablePaise || 0;
     
     let isCompleted = totalOutstanding <= 0;
     let monthIndex = 1;
@@ -157,12 +160,12 @@ exports.generateRepaymentTimeline = (loan) => {
 };
 
 exports.generateInterestSchedule = (loan) => {
-    const balances = FinancialLedgerService.deriveBalances(loan);
+    FinancialLedgerService.deriveBalances(loan);
     return {
-        totalAccruedPaise: balances.totalInterestAccruedPaise || 0,
-        totalPaidPaise: balances.totalInterestPaidPaise || 0,
-        outstandingInterestPaise: balances.interestOutstandingPaise || 0,
-        originalPrincipalPaise: loan.amountPaise || 0,
+        totalAccruedPaise: loan.interestOutstandingPaise || 0,
+        totalPaidPaise: loan.paidAmountPaise || 0,
+        outstandingInterestPaise: loan.interestOutstandingPaise || 0,
+        originalPrincipalPaise: loan.amountPaise || (loan.amount * 100) || 0,
         interestRateBps: (loan.interestRate || 0) * 100,
         interestMethod: 'simple',
         schedule: []

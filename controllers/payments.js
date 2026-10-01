@@ -167,12 +167,12 @@ exports.commitPayment = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Loan not found' });
         }
 
-        // Borrower must be the one submitting the OTP
-        if (loan.borrower.toString() !== req.user.id) {
+        // The lender initiates and records the payment, providing the OTP obtained from the borrower
+        if (loan.lender.toString() !== req.user.id) {
             return res.status(403).json({
                 success: false,
                 code: 'UNAUTHORIZED_ACTION',
-                message: 'Only the borrower can authorize this payment'
+                message: 'Only the lender can record this payment'
             });
         }
 
