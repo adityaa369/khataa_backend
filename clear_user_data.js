@@ -1,4 +1,3 @@
-// clear_user_data.js — run with: node clear_user_data.js
 require('dotenv').config();
 const mongoose = require('mongoose');
 
@@ -12,31 +11,32 @@ if (!MONGODB_URI) {
 async function clear() {
     console.log('Connecting to MongoDB...');
     await mongoose.connect(MONGODB_URI);
-    console.log('Connected.');
+    console.log(`Connected to Database: ${mongoose.connection.db.databaseName}`);
 
     const db = mongoose.connection.db;
 
-    const collections = [
-        'users',
-        'otps',
-        'loans',
-        'financialtransactions',
-        'transactionintents',
-        'fs.files',
-        'fs.chunks',
-        'notifications',
-    ];
+    // Fetch all collections dynamically to ensure we miss nothing (loans, chit funds, users, etc.)
+    const collections = await db.listCollections().toArray();
+    console.log(`Found ${collections.length} collections. Clearing data...`);
 
-    for (const name of collections) {
+    let totalDeleted = 0;
+
+    for (const collInfo of collections) {
+        const name = collInfo.name;
+        if (name.startsWith('system.')) continue;
+
         try {
-            const result = await db.collection(name).deleteMany({});
-            console.log(`✅ ${name}: ${result.deletedCount} documents deleted`);
+            const collection = db.collection(name);
+            const countBefore = await collection.countDocuments();
+            await collection.deleteMany({});
+            console.log(` - ${name}: ${countBefore} documents deleted`);
+            totalDeleted += countBefore;
         } catch (e) {
-            console.log(`⚠️  ${name}: skipped (${e.message})`);
+            console.log(` - ${name}: skipped (${e.message})`);
         }
     }
 
-    console.log('\nDone. Schema and indexes preserved. All user data cleared.');
+    console.log(`\nDone. Deleted ${totalDeleted} documents total. Schema and indexes preserved. All user data cleared.`);
     await mongoose.disconnect();
     process.exit(0);
 }
