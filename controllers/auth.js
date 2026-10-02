@@ -936,3 +936,23 @@ exports.clearUserData = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+// @desc    Update user profile
+// @route   PUT /api/auth/profile
+// @access  Private
+exports.updateProfile = asyncHandler(async (req, res, next) => {
+    const fieldsToUpdate = {};
+    if (req.body.profileImageId !== undefined) fieldsToUpdate.profileImageId = req.body.profileImageId;
+    
+    // Only allow updating profileImageId for now, expand if needed
+    const user = await User.findByIdAndUpdate(
+        req.user.id,
+        fieldsToUpdate,
+        { new: true, runValidators: true }
+    );
+
+    res.status(200).json({
+        success: true,
+        data: user
+    });
+});
