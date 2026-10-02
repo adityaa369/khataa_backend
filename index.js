@@ -165,6 +165,19 @@ mongoose.connect(MONGO_URI)
         // Initialize WebSockets for Live Auctions
         initAuctionEngine(server);
 
+                // Start Background Workers
+        const NotificationWorker = require('./workers/NotificationWorker');
+        const InterestAccrualWorker = require('./workers/InterestAccrualWorker');
+        const PaymentReminderWorker = require('./workers/PaymentReminderWorker');
+        const OperationalStateMonitor = require('./workers/OperationalStateMonitor');
+        const ReconciliationEngine = require('./workers/ReconciliationEngine');
+
+        setInterval(() => NotificationWorker.processOutbox().catch(console.error), 10 * 1000); // 10s
+        setInterval(() => InterestAccrualWorker.runDailyAccrual().catch(console.error), 60 * 60 * 1000); // 1h
+        setInterval(() => PaymentReminderWorker.runDailyReminders().catch(console.error), 60 * 60 * 1000); // 1h
+        setInterval(() => OperationalStateMonitor.runMonitor().catch(console.error), 5 * 60 * 1000); // 5m
+        setInterval(() => ReconciliationEngine.runReconciliation().catch(console.error), 60 * 60 * 1000); // 1h
+        
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`\n--- Khaata Server Live ---`);
             console.log(`Port: ${PORT}`);
