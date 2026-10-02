@@ -102,12 +102,20 @@ class NotificationWorker {
 
         for (const device of devices) {
             try {
+                // Ensure FCM data payload only contains strings
+                const fcmData = { eventId: String(event.eventId) };
+                if (event.payload) {
+                    for (const key of Object.keys(event.payload)) {
+                        fcmData[key] = String(event.payload[key]);
+                    }
+                }
+                
                 // FCM send
                 const result = await sendPushNotification(
                     device.token, 
                     event.payload.title, 
                     event.payload.body, 
-                    { eventId: event.eventId, ...event.payload }
+                    fcmData
                 );
                 
                 if (result && result.error && result.error.code === 'messaging/invalid-registration-token') {

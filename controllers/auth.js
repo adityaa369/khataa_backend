@@ -946,8 +946,8 @@ exports.updateProfile = async (req, res, next) => {
         if (req.body.profileImageId !== undefined) fieldsToUpdate.profileImageId = req.body.profileImageId;
         
         // Only allow updating profileImageId for now, expand if needed
-        const user = await User.findByIdAndUpdate(
-            req.user.id,
+        const user = await User.findOneAndUpdate(
+            { id: req.user.id },
             fieldsToUpdate,
             { new: true, runValidators: true }
         );
