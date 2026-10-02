@@ -58,29 +58,55 @@ async function autoWipe() {
 
         // Initialize state document safely if it doesn't exist
         try {
-            await configColl.insertOne({ _id: 'wipe_state', version: 0, status: 'idle' });
+            await configColl.insertOne({ _id: 'wipe_state', version: 0, status: 'APPLIED', claimedAt: new Date(0) });
         } catch (err) {
             // 11000 is Duplicate Key Error (already exists)
             if (err.code !== 11000) throw err;
         }
 
-        // Safeguard 5: Atomic Version Claim (Distributed Lock)
-        // If two Render instances execute simultaneously, only one will match the $lt condition
+        // Safeguard 5: Atomic Version Claim (Distributed Lock) with Lease Recovery
+        // Lease timeout: 5 minutes. If a wipe takes longer than 5 mins, it's considered crashed.
+        const leaseTimeout = new Date(Date.now() - 5 * 60000); 
+
         const claimResult = await configColl.findOneAndUpdate(
-            { _id: 'wipe_state', version: { $lt: targetVersion } },
-            { $set: { version: targetVersion, claimedAt: new Date(), status: 'in_progress' } },
-            { returnDocument: 'after' }
+            { 
+                _id: 'wipe_state', 
+                version: { $lt: targetVersion },
+                $or: [
+                    { status: 'APPLIED' },
+                    { status: 'RUNNING', claimedAt: { $lt: leaseTimeout } }
+                ]
+            },
+            { 
+                $set: { 
+                    status: 'RUNNING', 
+                    claimedAt: new Date(), 
+                    targetVersionAttempt: targetVersion 
+                } 
+            },
+            { returnDocument: 'before' }
         );
 
-        // claimResult.value is null if no document matched the query (version already claimed/applied)
+        // If claim failed, determine why
         if (!claimResult || !claimResult.value) {
-            console.log(`\nAUTO WIPE: SKIPPED — VERSION ALREADY APPLIED`);
-            console.log(`=========================================\n`);
-            await mongoose.disconnect();
-            return;
+            const currentState = await configColl.findOne({ _id: 'wipe_state' });
+            if (currentState && currentState.version >= targetVersion) {
+                console.log(`\nAUTO WIPE: SKIPPED — VERSION ALREADY APPLIED`);
+                console.log(`=========================================\n`);
+                await mongoose.disconnect();
+                return;
+            } else {
+                console.error(`\nCRITICAL ERROR: Wipe is currently RUNNING in another instance (or crashed recently). Aborting startup to prevent race conditions.`);
+                process.exit(1);
+            }
         }
 
-        console.log(`\n[AutoWipe] Version ${targetVersion} successfully claimed. Initiating wipe...`);
+        const isRecovery = claimResult.value.status === 'RUNNING' && claimResult.value.targetVersionAttempt === targetVersion;
+        if (isRecovery) {
+            console.log(`\n[AutoWipe] Recovering crashed wipe attempt for version ${targetVersion}...`);
+        } else {
+            console.log(`\n[AutoWipe] Version ${targetVersion} successfully claimed. Initiating wipe...`);
+        }
 
         // Safeguard 7 & 9: Explicit allow-list of disposable application data
         const allowList = [
@@ -118,10 +144,16 @@ async function autoWipe() {
             } catch (e) {} // ignore if collection doesn't exist
         }
 
-        // Mark completion
+        // Mark completion AND bump version only AFTER successful verification
         await configColl.updateOne(
             { _id: 'wipe_state' },
-            { $set: { status: 'completed', lastDeleted: deletedTotal } }
+            { 
+                $set: { 
+                    status: 'APPLIED', 
+                    version: targetVersion, 
+                    lastDeleted: deletedTotal 
+                } 
+            }
         );
 
         // Safeguard 11: Log only identity and counts
