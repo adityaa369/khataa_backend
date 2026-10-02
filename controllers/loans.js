@@ -988,43 +988,120 @@ exports.recordInterest = (req, res) => _handleCustomTransaction(req, res, 'recor
 exports.getPortfolioSummary = async (req, res) => {
     try {
         const userId = req.user.id;
-        
-        const loans = await Loan.find({ lender: userId });
-        
-        let loanCount = loans.length;
-        let activeLoanCount = 0;
-        let totalLentPaise = 0;
-        let totalCollectedPaise = 0;
-        let outstandingPaise = 0;
-        
-        for (const loan of loans) {
-            if (loan.status === 'active' || loan.status === 'completed' || loan.status === 'defaulted' || loan.status === 'closed') {
-                if (loan.status === 'active') {
-                    activeLoanCount++;
-                }
-                
-                const principal = loan.amountPaise || (loan.amount * 100) || 0;
-                totalLentPaise += principal;
-                
-                const paid = loan.paidAmountPaise || (loan.paidAmount * 100) || 0;
-                totalCollectedPaise += paid;
-                
-                let out = loan.principalOutstandingPaise;
-                if (out === undefined || out === null) {
-                    out = principal - paid;
-                }
-                outstandingPaise += Math.max(0, out);
-            }
+        const ACTIVE_STATUSES = ['active', 'completed', 'defaulted', 'closed'];
+
+        // ── LENDER stats (loans I gave out) ──────────────────────────────────
+        const givenLoans = await Loan.find({ lender: userId });
+
+        let lenderStats = {
+            loanCount: 0,
+            activeLoanCount: 0,
+            closedLoanCount: 0,
+            defaultedLoanCount: 0,
+            totalLentPaise: 0,
+            totalCollectedPaise: 0,
+            outstandingPaise: 0,
+            collectionRatePct: 0,
+            monthlyCollections: [],
+        };
+
+        for (const loan of givenLoans) {
+            if (!ACTIVE_STATUSES.includes(loan.status)) continue;
+            lenderStats.loanCount++;
+            if (loan.status === 'active')    lenderStats.activeLoanCount++;
+            if (loan.status === 'closed')    lenderStats.closedLoanCount++;
+            if (loan.status === 'defaulted') lenderStats.defaultedLoanCount++;
+
+            const principal = loan.amountPaise || (loan.amount * 100) || 0;
+            lenderStats.totalLentPaise += principal;
+
+            const paid = loan.paidAmountPaise || (loan.paidAmount * 100) || 0;
+            lenderStats.totalCollectedPaise += paid;
+
+            let out = loan.principalOutstandingPaise;
+            if (out == null) out = principal - paid;
+            lenderStats.outstandingPaise += Math.max(0, out);
         }
-        
+
+        if (lenderStats.totalLentPaise > 0) {
+            lenderStats.collectionRatePct = Math.round(
+                (lenderStats.totalCollectedPaise / lenderStats.totalLentPaise) * 100
+            );
+        }
+
+        // Monthly collections for the last 6 months (lender only)
+        const now = new Date();
+        const monthlyMap = {};
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+            monthlyMap[key] = { month: d.toLocaleString('en-IN', { month: 'short' }), amountPaise: 0 };
+        }
+        try {
+            const Payment = require('../models/Payment');
+            const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+            const lenderPayments = await Payment.find({
+                loanId: { $in: givenLoans.map(l => l._id) },
+                status: 'completed',
+                createdAt: { $gte: sixMonthsAgo }
+            });
+            for (const p of lenderPayments) {
+                const key = p.createdAt.getFullYear() + '-' + String(p.createdAt.getMonth() + 1).padStart(2, '0');
+                if (monthlyMap[key]) monthlyMap[key].amountPaise += p.amountPaise || 0;
+            }
+        } catch (paymentErr) {
+            console.warn('[Portfolio] Payment model not found, skipping monthly chart:', paymentErr.message);
+        }
+        lenderStats.monthlyCollections = Object.values(monthlyMap);
+
+        // ── BORROWER stats (loans I took) ─────────────────────────────────────
+        const takenLoans = await Loan.find({ borrower: userId });
+
+        let borrowerStats = {
+            loanCount: 0,
+            activeLoanCount: 0,
+            closedLoanCount: 0,
+            totalBorrowedPaise: 0,
+            totalRepaidPaise: 0,
+            outstandingPaise: 0,
+            repaymentRatePct: 0,
+        };
+
+        for (const loan of takenLoans) {
+            if (!ACTIVE_STATUSES.includes(loan.status)) continue;
+            borrowerStats.loanCount++;
+            if (loan.status === 'active') borrowerStats.activeLoanCount++;
+            if (loan.status === 'closed') borrowerStats.closedLoanCount++;
+
+            const principal = loan.amountPaise || (loan.amount * 100) || 0;
+            borrowerStats.totalBorrowedPaise += principal;
+
+            const paid = loan.paidAmountPaise || (loan.paidAmount * 100) || 0;
+            borrowerStats.totalRepaidPaise += paid;
+
+            let out = loan.principalOutstandingPaise;
+            if (out == null) out = principal - paid;
+            borrowerStats.outstandingPaise += Math.max(0, out);
+        }
+
+        if (borrowerStats.totalBorrowedPaise > 0) {
+            borrowerStats.repaymentRatePct = Math.round(
+                (borrowerStats.totalRepaidPaise / borrowerStats.totalBorrowedPaise) * 100
+            );
+        }
+
         res.status(200).json({
             success: true,
             data: {
-                loanCount,
-                activeLoanCount,
-                totalLentPaise,
-                totalCollectedPaise,
-                outstandingPaise
+                // Legacy fields kept for backward compatibility
+                loanCount: lenderStats.loanCount,
+                activeLoanCount: lenderStats.activeLoanCount,
+                totalLentPaise: lenderStats.totalLentPaise,
+                totalCollectedPaise: lenderStats.totalCollectedPaise,
+                outstandingPaise: lenderStats.outstandingPaise,
+                // New structured sections - never mixed
+                lenderStats,
+                borrowerStats,
             }
         });
     } catch (err) {
