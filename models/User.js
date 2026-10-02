@@ -63,6 +63,10 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: false
     },
+    profileImageId: {
+        type: String,
+        required: false
+    },
     // Notification preferences — persisted server-side for cross-device sync
     notificationPreferences: {
         loanUpdates:    { type: Boolean, default: true },   // TRANSACTIONAL
