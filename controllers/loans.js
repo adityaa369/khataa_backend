@@ -67,6 +67,7 @@ exports.createLoan = async (req, res) => {
             transaction_id,
             documentUrl,
             documentId,
+            documentIds,
             idempotency_key,
         } = req.body;
 
@@ -182,12 +183,12 @@ exports.createLoan = async (req, res) => {
 
 
         // Verify ownership of uploaded documents in Firebase Storage
-        if (documents && documents.length > 0) {
+        if (documentIds && documentIds.length > 0) {
             const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
             const { getStorage } = require('firebase-admin/storage');
             const bucket = getStorage().bucket(bucketName);
             
-            for (const docId of documents) {
+            for (const docId of documentIds) {
                 if (docId.startsWith('documents/')) {
                     const file = bucket.file(docId);
                     const [exists] = await file.exists();
