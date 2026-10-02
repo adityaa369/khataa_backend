@@ -124,9 +124,11 @@ if (process.env.NODE_ENV !== 'production') {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
         try {
-            const collections = mongoose.connection.collections;
-            for (const key in collections) {
-                await collections[key].deleteMany();
+            const collections = await mongoose.connection.db.listCollections().toArray();
+            for (const collInfo of collections) {
+                if (!collInfo.name.startsWith('system.')) {
+                    await mongoose.connection.db.collection(collInfo.name).deleteMany({});
+                }
             }
             res.json({ success: true, message: 'Database cleared (dev only).' });
         } catch (err) {
