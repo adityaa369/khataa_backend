@@ -93,7 +93,7 @@ class FinancialLedgerService {
         loan.paidAmount = loan.paidAmountPaise / 100.0;
     }
 
-    static async recordPayment(loan, amountPaise, intentId, recordedBy, effectiveAt = new Date()) {
+    static async recordPayment(loan, amountPaise, intentId, recordedBy, effectiveAt = new Date(), paymentType = null) {
         if (!loan.transactions.some(t => t.type === 'loan_given')) {
             throw new Error('Cannot process V2 payment: Loan requires legacy reconciliation/migration first.');
         }
@@ -111,23 +111,33 @@ class FinancialLedgerService {
             throw new Error(`Overpayment rejected. Amount: ${amountPaise}, Outstanding: ${totalOutstanding}`);
         }
 
-        // Waterfall allocation
         let remaining = amountPaise;
         let fAlloc = 0;
         let iAlloc = 0;
         let pAlloc = 0;
+        
+        const isInterestLoan = loan.type === 'interest_credit' || loan.type === 'interest';
 
-        if (remaining > 0 && loan.feesOutstandingPaise > 0) {
-            fAlloc = Math.min(remaining, loan.feesOutstandingPaise);
-            remaining -= fAlloc;
-        }
-        if (remaining > 0 && loan.interestOutstandingPaise > 0) {
-            iAlloc = Math.min(remaining, loan.interestOutstandingPaise);
-            remaining -= iAlloc;
-        }
-        if (remaining > 0 && loan.principalOutstandingPaise > 0) {
-            pAlloc = Math.min(remaining, loan.principalOutstandingPaise);
-            remaining -= pAlloc;
+        if (isInterestLoan && paymentType === 'interest') {
+            iAlloc = amountPaise;
+            remaining = 0;
+        } else if (isInterestLoan && paymentType === 'principal') {
+            pAlloc = amountPaise;
+            remaining = 0;
+        } else {
+            // Waterfall allocation
+            if (remaining > 0 && loan.feesOutstandingPaise > 0) {
+                fAlloc = Math.min(remaining, loan.feesOutstandingPaise);
+                remaining -= fAlloc;
+            }
+            if (remaining > 0 && loan.interestOutstandingPaise > 0) {
+                iAlloc = Math.min(remaining, loan.interestOutstandingPaise);
+                remaining -= iAlloc;
+            }
+            if (remaining > 0 && loan.principalOutstandingPaise > 0) {
+                pAlloc = Math.min(remaining, loan.principalOutstandingPaise);
+                remaining -= pAlloc;
+            }
         }
 
         loan.transactions.push({

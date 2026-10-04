@@ -13,7 +13,7 @@ const admin = require('firebase-admin');
 exports.initiatePayment = async (req, res) => {
     try {
         const { id: loanId } = req.params;
-        const { amountPaise, note } = req.body;
+        const { amountPaise, note, paymentType } = req.body;
 
         if (!amountPaise || amountPaise <= 0) {
             return res.status(400).json({ success: false, message: 'Valid amountPaise is required' });
@@ -31,7 +31,16 @@ exports.initiatePayment = async (req, res) => {
         }
 
         FinancialLedgerService.deriveBalances(loan);
-        const totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
+        let totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
+        if (loan.type === 'interest_credit' || loan.type === 'interest') {
+            if (paymentType === 'interest') {
+                totalOutstandingPaise = loan.interestOutstandingPaise || 0;
+            } else if (paymentType === 'principal') {
+                totalOutstandingPaise = loan.principalOutstandingPaise || 0;
+            } else {
+                totalOutstandingPaise = (loan.principalOutstandingPaise || 0) + (loan.interestOutstandingPaise || 0) + (loan.feesOutstandingPaise || 0);
+            }
+        }
         if (amountPaise > totalOutstandingPaise) {
             return res.status(400).json({
                 success: false,
@@ -48,7 +57,7 @@ exports.initiatePayment = async (req, res) => {
             userId: req.user.id,
             loanId: loan._id,
             status: 'PENDING',
-            payload: { amountPaise, note },
+            payload: { amountPaise, note, paymentType },
             expiresAt: new Date(Date.now() + 5 * 60000)
         });
 
@@ -200,8 +209,18 @@ exports.commitPayment = async (req, res) => {
 
         // 6. Overpayment check before transaction
         const amountPaise = intent.payload.amountPaise;
+        const paymentType = intent.payload.paymentType;
         FinancialLedgerService.deriveBalances(loan);
-        const totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
+        let totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
+        if (loan.type === 'interest_credit' || loan.type === 'interest') {
+            if (paymentType === 'interest') {
+                totalOutstandingPaise = loan.interestOutstandingPaise || 0;
+            } else if (paymentType === 'principal') {
+                totalOutstandingPaise = loan.principalOutstandingPaise || 0;
+            } else {
+                totalOutstandingPaise = (loan.principalOutstandingPaise || 0) + (loan.interestOutstandingPaise || 0) + (loan.feesOutstandingPaise || 0);
+            }
+        }
 
         if (amountPaise > totalOutstandingPaise) {
             await TransactionIntent.updateOne({ intentId }, { status: 'REJECTED' });
@@ -221,7 +240,7 @@ exports.commitPayment = async (req, res) => {
             await OtpChallenge.updateOne({ _id: challenge._id }, { status: 'CONSUMED' }, { session });
 
             // Execute payment via FROZEN FinancialLedgerService
-            result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id);
+            result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id, new Date(), paymentType);
             
             // Fix: Actually save the loan inside the transaction!
             await loan.save({ session });
@@ -302,8 +321,18 @@ exports.authorizeFirebasePhonePayment = async (req, res) => {
         }
 
         const amountPaise = intent.payload.amountPaise;
+        const paymentType = intent.payload.paymentType;
         FinancialLedgerService.deriveBalances(loan);
-        const totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
+        let totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
+        if (loan.type === 'interest_credit' || loan.type === 'interest') {
+            if (paymentType === 'interest') {
+                totalOutstandingPaise = loan.interestOutstandingPaise || 0;
+            } else if (paymentType === 'principal') {
+                totalOutstandingPaise = loan.principalOutstandingPaise || 0;
+            } else {
+                totalOutstandingPaise = (loan.principalOutstandingPaise || 0) + (loan.interestOutstandingPaise || 0) + (loan.feesOutstandingPaise || 0);
+            }
+        }
 
         if (amountPaise > totalOutstandingPaise) {
             await TransactionIntent.updateOne({ intentId }, { status: 'REJECTED' });
@@ -347,7 +376,7 @@ exports.authorizeFirebasePhonePayment = async (req, res) => {
                 throw new Error('INTENT_ALREADY_CONSUMED');
             }
 
-            result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id);
+            result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id, new Date(), paymentType);
             await loan.save({ session });
             await session.commitTransaction();
 
