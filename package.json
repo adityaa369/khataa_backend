@@ -30,6 +30,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^7.6.3",
     "nodemailer": "^6.9.13",
+    "pdfkit": "^0.20.2",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
