@@ -985,11 +985,8 @@ exports.changeMpin = async (req, res) => {
             { upsert: true, new: true }
         );
 
-        const { getRedisClient } = require('../config/redis');
-        const redisClient = getRedisClient();
-        if (redisClient) {
-            await redisClient.del('mpin_attempts:' + req.user.id);
-        }
+        const { cacheInvalidate } = require('../config/redis');
+        await cacheInvalidate('mpin_attempts:' + req.user.id);
 
         const SecurityEvent = require('../models/SecurityEvent');
         await SecurityEvent.create({
