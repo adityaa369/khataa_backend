@@ -1037,20 +1037,21 @@ exports.getPortfolioSummary = async (req, res) => {
             const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
             monthlyMap[key] = { month: d.toLocaleString('en-IN', { month: 'short' }), amountPaise: 0 };
         }
-        try {
-            const Transaction = require('../models/Transaction');
-            const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-            const lenderPayments = await Transaction.find({
-                loanId: { $in: givenLoans.map(l => l._id) },
-                type: 'PAYMENT',
-                createdAt: { $gte: sixMonthsAgo }
-            });
-            for (const p of lenderPayments) {
-                const key = p.createdAt.getFullYear() + '-' + String(p.createdAt.getMonth() + 1).padStart(2, '0');
-                if (monthlyMap[key]) monthlyMap[key].amountPaise += p.amountPaise || 0;
+        const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+        for (const loan of givenLoans) {
+            if (!loan.transactions) continue;
+            for (const p of loan.transactions) {
+                if (p.type === 'payment' || p.type === 'PAYMENT' || p.type === 'interest_payment' || p.type === 'credit') {
+                    const pDate = new Date(p.recordedAt || p.effectiveAt || p.createdAt || p.date);
+                    if (pDate && pDate >= sixMonthsAgo && !isNaN(pDate.getTime())) {
+                        const key = pDate.getFullYear() + '-' + String(pDate.getMonth() + 1).padStart(2, '0');
+                        if (monthlyMap[key]) {
+                            const amt = p.amountPaise != null ? p.amountPaise : (p.amount ? p.amount * 100 : 0);
+                            monthlyMap[key].amountPaise += amt;
+                        }
+                    }
+                }
             }
-        } catch (paymentErr) {
-            console.warn('[Portfolio] Payment model not found, skipping monthly chart:', paymentErr.message);
         }
         lenderStats.monthlyCollections = Object.values(monthlyMap);
 
