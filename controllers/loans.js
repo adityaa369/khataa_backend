@@ -1215,40 +1215,48 @@ exports.downloadNoc = async (req, res) => {
         const doc = new PDFDocument({ margin: 50, size: 'A4' });
         
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="NOC_${loan._id}.pdf"`);
+        res.setHeader('Content-Disposition', 'attachment; filename="NOC_' + loan._id + '.pdf"');
         
         doc.pipe(res);
 
         doc.fontSize(24).font('Helvetica-Bold').text('NO DUES CERTIFICATE', { align: 'center' });
         doc.moveDown();
-        doc.fontSize(12).font('Helvetica').text(\Date: \\);
+        doc.fontSize(12).font('Helvetica').text('Date: ' + new Date().toLocaleDateString(), { align: 'right' });
         doc.moveDown(2);
         
         doc.fontSize(14).font('Helvetica-Bold').text('To Whom It May Concern,');
         doc.moveDown();
         
+        const borrowerName = loan.borrowerName || 'Borrower';
         doc.fontSize(12).font('Helvetica').text(
-            \This is to certify that the credit agreement (Reference ID: \) between \ +
-            \	he Lender and the Borrower (\) has been fully settled.\
+            'This is to certify that the credit agreement (Reference ID: ' + loan._id + ') between ' +
+            'the Lender and the Borrower (' + borrowerName + ') has been fully settled.'
         );
         doc.moveDown();
         
         doc.rect(50, doc.y, 500, 150).stroke();
         doc.moveDown(0.5);
-        doc.text(\   Principal Amount: Rs. \\, { indent: 10 });
-        doc.text(\   Lender ID: \\, { indent: 10 });
-        doc.text(\   Borrower ID: \\, { indent: 10 });
-        doc.text(\   Status: SETTLED IN FULL\, { indent: 10 });
+        doc.fontSize(12).font('Helvetica-Bold').text('Credit Details', { align: 'center' });
+        doc.moveDown();
+        doc.font('Helvetica').text('Principal Amount: ' + (loan.amount / 100) + ' INR', 70);
+        doc.text('Total Paid: ' + (loan.paidAmount / 100) + ' INR', 70);
+        const startDateStr = new Date(loan.startDate || loan.createdAt).toLocaleDateString();
+        doc.text('Start Date: ' + startDateStr, 70);
+        doc.moveDown(2);
         
-        doc.moveDown(5);
-        doc.fontSize(10).font('Helvetica-Oblique').text('This is a computer generated certificate and requires no signature.', { align: 'center' });
+        doc.fontSize(12).font('Helvetica').text(
+            'This electronically generated document confirms that there are no outstanding dues remaining against this credit.',
+            50
+        );
         
-        doc.end();
+        doc.moveDown(4);
+        doc.font('Helvetica-Bold').text('Authorized Signatory', { align: 'right' });
 
+        doc.end();
     } catch (err) {
-        console.error('[NOC] Error:', err.message);
+        console.error(err);
         if (!res.headersSent) {
-            res.status(500).json({ success: false, message: 'Server error' });
+            res.status(500).json({ success: false, message: 'Failed to generate NOC' });
         }
     }
 };
