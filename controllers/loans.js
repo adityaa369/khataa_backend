@@ -1038,11 +1038,11 @@ exports.getPortfolioSummary = async (req, res) => {
             monthlyMap[key] = { month: d.toLocaleString('en-IN', { month: 'short' }), amountPaise: 0 };
         }
         try {
-            const Payment = require('../models/Payment');
+            const Transaction = require('../models/Transaction');
             const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-            const lenderPayments = await Payment.find({
+            const lenderPayments = await Transaction.find({
                 loanId: { $in: givenLoans.map(l => l._id) },
-                status: 'completed',
+                type: 'PAYMENT',
                 createdAt: { $gte: sixMonthsAgo }
             });
             for (const p of lenderPayments) {
@@ -1190,5 +1190,65 @@ exports.deleteDocument = async (req, res) => {
     } catch (err) {
         console.error('[Cleanup] Error deleting document:', err.message);
         return res.status(500).json({ success: false, message: 'Server error during cleanup' });
+    }
+};
+
+
+exports.downloadNoc = async (req, res) => {
+    try {
+        const PDFDocument = require('pdfkit');
+        const Loan = require('../models/Loan');
+        const loan = await Loan.findById(req.params.id);
+        
+        if (!loan) {
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+        
+        if (loan.lender.toString() !== req.user.id && loan.borrower.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
+
+        if (loan.status !== 'completed' && loan.status !== 'closed') {
+            return res.status(400).json({ success: false, message: 'Loan is not fully paid yet' });
+        }
+
+        const doc = new PDFDocument({ margin: 50, size: 'A4' });
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', \ttachment; filename="NOC_\.pdf"\);
+        
+        doc.pipe(res);
+
+        doc.fontSize(24).font('Helvetica-Bold').text('NO DUES CERTIFICATE', { align: 'center' });
+        doc.moveDown();
+        doc.fontSize(12).font('Helvetica').text(\Date: \\);
+        doc.moveDown(2);
+        
+        doc.fontSize(14).font('Helvetica-Bold').text('To Whom It May Concern,');
+        doc.moveDown();
+        
+        doc.fontSize(12).font('Helvetica').text(
+            \This is to certify that the credit agreement (Reference ID: \) between \ +
+            \	he Lender and the Borrower (\) has been fully settled.\
+        );
+        doc.moveDown();
+        
+        doc.rect(50, doc.y, 500, 150).stroke();
+        doc.moveDown(0.5);
+        doc.text(\   Principal Amount: Rs. \\, { indent: 10 });
+        doc.text(\   Lender ID: \\, { indent: 10 });
+        doc.text(\   Borrower ID: \\, { indent: 10 });
+        doc.text(\   Status: SETTLED IN FULL\, { indent: 10 });
+        
+        doc.moveDown(5);
+        doc.fontSize(10).font('Helvetica-Oblique').text('This is a computer generated certificate and requires no signature.', { align: 'center' });
+        
+        doc.end();
+
+    } catch (err) {
+        console.error('[NOC] Error:', err.message);
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, message: 'Server error' });
+        }
     }
 };

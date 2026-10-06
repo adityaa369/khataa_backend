@@ -260,6 +260,13 @@ exports.commitPayment = async (req, res) => {
             session.endSession();
         }
 
+        try {
+            const { invalidateLoanCache } = require('../middleware/cache');
+            await invalidateLoanCache(String(loan.lender), String(loan.borrower));
+        } catch (cacheErr) {
+            console.error('[CommitPayment] Cache invalidation failed:', cacheErr.message);
+        }
+
         // 8. Dispatch notifications (outside transaction)
         try {
             await EventDispatcher.dispatch({

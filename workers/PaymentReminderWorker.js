@@ -29,6 +29,7 @@ class PaymentReminderWorker {
                 let nudgeType = null;
                 if (diffDays === 3) nudgeType = 'due_in_3';
                 else if (diffDays === 1) nudgeType = 'due_in_1';
+                else if (diffDays === 0) nudgeType = 'overdue_0';
                 else if (diffDays === -1) nudgeType = 'overdue_1';
                 else if (diffDays === -7) nudgeType = 'overdue_7';
 
@@ -38,11 +39,11 @@ class PaymentReminderWorker {
                     try {
                         const amountRupees = ((currentPeriod.expectedAmountPaise || 0) / 100).toFixed(2);
                         let title = 'Payment Due Soon';
-                        let body = `Your payment of ₹${amountRupees} for month ${currentPeriod.periodIndex} is due in ${diffDays} days.`;
+                        let body = `Your payment of ₹${amountRupees} for month ${currentPeriod.periodIndex} is due in ${diffDays} ${diffDays === 1 ? 'day' : 'days'}.`;
                         
-                        if (diffDays < 0) {
-                            title = 'Payment Overdue';
-                            body = `Your payment of ₹${amountRupees} for month ${currentPeriod.periodIndex} is overdue.`;
+                        if (diffDays <= 0) {
+                            title = 'Monthly Payment Due';
+                            body = `Your payment of ₹${amountRupees} for month ${currentPeriod.periodIndex} is still due. Please pay your lender at the earliest.`;
                         }
 
                         // EventDispatcher automatically handles idempotency and suppresses duplicates!
