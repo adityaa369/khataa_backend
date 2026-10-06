@@ -961,3 +961,48 @@ exports.updateProfile = async (req, res, next) => {
         res.status(500).json({ success: false, message: 'Server error' });
     }
 };
+
+exports.changeMpin = async (req, res) => {
+    const { mpin } = req.body;
+    if (!mpin || mpin.length !== 6) {
+        return res.status(400).json({ success: false, message: 'Invalid MPIN' });
+    }
+    try {
+        const bcrypt = require('bcryptjs');
+        const MPinCredential = require('../models/MPinCredential');
+        const salt = await bcrypt.genSalt(12);
+        const hash = await bcrypt.hash(mpin, salt);
+        
+        await MPinCredential.findOneAndUpdate(
+            { userId: req.user._id },
+            { 
+                userId: req.user._id,
+                firebaseUid: req.user.firebaseUid || ('mock_uid_' + req.user.phone),
+                mpinHash: hash,
+                failedAttempts: 0,
+                lockoutUntil: null
+            },
+            { upsert: true, new: true }
+        );
+
+        const { getRedisClient } = require('../config/redis');
+        const redisClient = getRedisClient();
+        if (redisClient) {
+            await redisClient.del('mpin_attempts:' + req.user.id);
+        }
+
+        const SecurityEvent = require('../models/SecurityEvent');
+        await SecurityEvent.create({
+            userId: req.user._id,
+            eventType: 'MPIN_CHANGED',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'] || 'Unknown'
+        });
+
+        res.status(200).json({ success: true, message: 'MPIN changed successfully' });
+    } catch (err) {
+        console.error('[Auth] changeMpin error:', err.message);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
