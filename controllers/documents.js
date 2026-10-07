@@ -5,27 +5,51 @@ exports.downloadDocument = async (req, res) => {
     try {
         const documentId = req.params.id;
         
-        // 1. Get metadata to check if exists
-        const metadata = await GridFSService.getDocumentMetadata(documentId);
-        if (!metadata) {
-            return res.status(404).json({ success: false, message: 'Document not found' });
-        }
-
-        // 2. Authorize
-        // The user must be the uploader, OR the lender/borrower of the loan that owns this document.
         let authorized = false;
-        
-        if (metadata.metadata && metadata.metadata.uploadedBy === req.user.id) {
-            authorized = true;
+        let contentType = 'application/octet-stream';
+        let contentLength = 0;
+        let downloadStream;
+
+        if (documentId.startsWith('documents/')) {
+            // Firebase Storage
+            const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
+            const { getStorage } = require('firebase-admin/storage');
+            const bucket = getStorage().bucket(bucketName);
+            const file = bucket.file(documentId);
+            
+            const [exists] = await file.exists();
+            if (!exists) return res.status(404).json({ success: false, message: 'Document not found' });
+            
+            const [metadata] = await file.getMetadata();
+            contentType = metadata.contentType || 'application/octet-stream';
+            contentLength = metadata.size;
+            
+            // Check auth
+            if (metadata.metadata && metadata.metadata.uploadedBy === req.user.id) {
+                authorized = true;
+            }
+            downloadStream = file.createReadStream();
+        } else {
+            // GridFS
+            const metadata = await GridFSService.getDocumentMetadata(documentId);
+            if (!metadata) return res.status(404).json({ success: false, message: 'Document not found' });
+            
+            contentType = metadata.contentType || 'application/octet-stream';
+            contentLength = metadata.length;
+            
+            if (metadata.metadata && metadata.metadata.uploadedBy === req.user.id) {
+                authorized = true;
+            }
+            downloadStream = GridFSService.downloadDocumentStream(documentId);
         }
 
         // If not uploader, check if it's attached to a loan they are part of
         if (!authorized) {
-            // Because Loan has documentUrl or documentId, let's check:
             const loan = await Loan.findOne({
                 $or: [
                     { documentId: documentId },
-                    { documentUrl: documentId } // some legacy fields might have stored id here
+                    { documentUrl: documentId },
+                    { documentIds: documentId }
                 ]
             });
 
@@ -39,10 +63,8 @@ exports.downloadDocument = async (req, res) => {
         }
 
         // 3. Stream bytes
-        res.set('Content-Type', metadata.contentType || 'application/octet-stream');
-        res.set('Content-Length', metadata.length);
-        
-        const downloadStream = GridFSService.downloadDocumentStream(documentId);
+        res.set('Content-Type', contentType);
+        res.set('Content-Length', contentLength);
         
         downloadStream.on('error', (err) => {
             console.error('[Documents] Stream error:', err.message);
