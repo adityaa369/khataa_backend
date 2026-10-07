@@ -64,7 +64,10 @@ exports.downloadDocument = async (req, res) => {
 
         // 3. Stream bytes
         res.set('Content-Type', contentType);
-        res.set('Content-Length', contentLength);
+        // We DO NOT set Content-Length because if the underlying storage (like Firebase GCS) 
+        // compresses the file, the stream will be automatically decompressed by the Node.js client, 
+        // causing the actual byte length to be LARGER than metadata.size. Setting Content-Length
+        // causes the client (Dio) to truncate the file, leading to "Could not decompress image".
         
         downloadStream.on('error', (err) => {
             console.error('[Documents] Stream error:', err.message);
