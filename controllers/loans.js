@@ -270,7 +270,17 @@ exports.getGivenLoans = async (req, res) => {
         const loans = await Loan.find({ lender: req.user.id, status: { $ne: 'pending_otp' } });
         const loansMapped = [];
         const User = require('../models/User'); // Import User model
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
         for (const loan of loans) {
+            // Retroactive fix for fixed-interest loans without upfront interest
+            if (['interest_credit', 'business_credit'].includes(loan.loanType)) {
+                const hasUpfront = loan.transactions && loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
+                if (!hasUpfront && loan.status !== 'pending_approval' && loan.status !== 'pending_otp' && loan.status !== 'rejected' && loan.principalOutstandingPaise > 0) {
+                    await FinancialLedgerService.accrueInterest(loan);
+                    await loan.save();
+                }
+            }
+            
             const loanObj = loan.toObject ? loan.toObject() : loan;
             
             // Dynamically fetch borrower name if registered
@@ -334,6 +344,16 @@ exports.getLoanById = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Not authorized to view this loan' });
         }
 
+        // Retroactive fix for fixed-interest loans without upfront interest
+        if (['interest_credit', 'business_credit'].includes(loan.loanType)) {
+            const hasUpfront = loan.transactions && loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
+            if (!hasUpfront && loan.status !== 'pending_approval' && loan.status !== 'pending_otp' && loan.status !== 'rejected' && loan.principalOutstandingPaise > 0) {
+                const FinancialLedgerService = require('../services/FinancialLedgerService');
+                await FinancialLedgerService.accrueInterest(loan);
+                await loan.save();
+            }
+        }
+
         res.status(200).json({ success: true, loan });
     } catch (err) {
         console.error('[Loans] getLoanById Error:', err.message);
@@ -360,7 +380,17 @@ exports.getTakenLoans = async (req, res) => {
 
         // Populate lender details manually to avoid changing the Mongoose schema
         const loansWithLender = [];
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
         for (const loan of loans) {
+            // Retroactive fix for fixed-interest loans without upfront interest
+            if (['interest_credit', 'business_credit'].includes(loan.loanType)) {
+                const hasUpfront = loan.transactions && loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
+                if (!hasUpfront && loan.status !== 'pending_approval' && loan.status !== 'pending_otp' && loan.status !== 'rejected' && loan.principalOutstandingPaise > 0) {
+                    await FinancialLedgerService.accrueInterest(loan);
+                    await loan.save();
+                }
+            }
+
             const lenderUser = await User.findOne({ id: loan.lender });
             const loanObj = loan.toObject ? loan.toObject() : loan;
             if (lenderUser) {
