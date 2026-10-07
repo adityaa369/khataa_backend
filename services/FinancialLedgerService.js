@@ -7,6 +7,29 @@ class FinancialLedgerService {
             return; // No principal to accrue on
         }
 
+        if (loan.loanType === 'interest_credit' || loan.loanType === 'business_credit') {
+            // These loan types accrue their entire duration's interest upfront, not daily.
+            const hasUpfront = loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
+            if (!hasUpfront) {
+                const months = loan.durationMonths || 0;
+                const ratePct = loan.interestRate || 0;
+                const amountPaise = loan.amountPaise || loan.principalOutstandingPaise;
+                const totalInterestPaise = Math.floor((amountPaise * ratePct * months) / 100);
+                if (totalInterestPaise > 0) {
+                    loan.transactions.push({
+                        type: 'interest_accrued',
+                        amountPaise: totalInterestPaise,
+                        interestAllocationPaise: totalInterestPaise,
+                        note: `Upfront interest accrued for ${months} months`,
+                        recordedAt: new Date(),
+                        effectiveAt: loan.activatedAt || loan.startDate || new Date()
+                    });
+                    this.deriveBalances(loan);
+                }
+            }
+            return;
+        }
+
         // 1. Determine last accrual or activation date
         const lastAccrualOrActivation = loan.transactions
             .filter(t => ['interest_accrued', 'loan_given', 'credit_added'].includes(t.type))
@@ -202,6 +225,9 @@ class FinancialLedgerService {
             });
             loan.amountPaise = amountPaise;
             this.deriveBalances(loan);
+            
+            // Accrue upfront interest immediately if applicable
+            await this.accrueInterest(loan, effectiveAt);
         }
         return loan;
     }
