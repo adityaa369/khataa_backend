@@ -11,7 +11,10 @@ class FinancialLedgerService {
             // These loan types accrue their entire duration's interest upfront, not daily.
             const hasUpfront = loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
             if (!hasUpfront) {
-                const months = loan.durationMonths || 0;
+                let months = loan.durationMonths || 0;
+                if (loan.durationType === 'Days') {
+                    months = months / 30.0;
+                }
                 const ratePct = loan.interestRate || 0;
                 const amountPaise = loan.amountPaise || loan.principalOutstandingPaise;
                 const totalInterestPaise = Math.floor((amountPaise * ratePct * months) / 100);
@@ -20,7 +23,7 @@ class FinancialLedgerService {
                         type: 'interest_accrued',
                         amountPaise: totalInterestPaise,
                         interestAllocationPaise: totalInterestPaise,
-                        note: `Upfront interest accrued for ${months} months`,
+                        note: `Upfront interest accrued for ${loan.durationMonths} ${loan.durationType || 'months'}`,
                         recordedAt: new Date(),
                         effectiveAt: loan.activatedAt || loan.startDate || new Date()
                     });
