@@ -6,7 +6,11 @@ exports.generateRepaymentTimeline = (loan) => {
         return { trackingEnabled: false, reason: 'Missing start date or duration' };
     }
 
-    const durationMonths = loan.durationMonths;
+    let durationMonths = loan.durationMonths;
+    if (loan.durationType === 'Days') {
+        durationMonths = Math.ceil(durationMonths / 30.0);
+        if (durationMonths < 1) durationMonths = 1;
+    }
     FinancialLedgerService.deriveBalances(loan);
     
     const originalPrincipal = loan.amountPaise || (loan.amount * 100) || 0;
