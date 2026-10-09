@@ -1002,7 +1002,8 @@ async function _handleCustomTransaction(req, res, actionType) {
             const sessionLoan = await Loan.findById(loan._id).session(session);
 
             if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-                await FinancialLedgerService.recordPayment(sessionLoan, pa, intentId, req.user.id);
+                const pType = actionType === 'recordInterest' ? 'interest' : 'principal';
+                await FinancialLedgerService.recordPayment(sessionLoan, pa, intentId, req.user.id, new Date(), pType);
                 notifTitle = 'Payment Recorded';
                 notifBody = `Your lender recorded a payment of Rs.${pa / 100}. Remaining: Rs.${sessionLoan.totalPayablePaise / 100}.`;
             } else if (actionType === 'addCredit') {

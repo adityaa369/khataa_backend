@@ -145,25 +145,31 @@ class FinancialLedgerService {
         const isInterestLoan = loan.type === 'interest_credit' || loan.type === 'interest';
 
         if (isInterestLoan && paymentType === 'interest') {
-            iAlloc = amountPaise;
-            remaining = 0;
+            iAlloc = Math.min(amountPaise, loan.interestOutstandingPaise);
+            remaining = amountPaise - iAlloc;
         } else if (isInterestLoan && paymentType === 'principal') {
-            pAlloc = amountPaise;
-            remaining = 0;
-        } else {
-            // Waterfall allocation
-            if (remaining > 0 && loan.feesOutstandingPaise > 0) {
-                fAlloc = Math.min(remaining, loan.feesOutstandingPaise);
-                remaining -= fAlloc;
-            }
-            if (remaining > 0 && loan.interestOutstandingPaise > 0) {
-                iAlloc = Math.min(remaining, loan.interestOutstandingPaise);
-                remaining -= iAlloc;
-            }
-            if (remaining > 0 && loan.principalOutstandingPaise > 0) {
-                pAlloc = Math.min(remaining, loan.principalOutstandingPaise);
-                remaining -= pAlloc;
-            }
+            pAlloc = Math.min(amountPaise, loan.principalOutstandingPaise);
+            remaining = amountPaise - pAlloc;
+        }
+
+        // Waterfall allocation for whatever is remaining
+        if (remaining > 0 && loan.feesOutstandingPaise > 0) {
+            const fAllowed = loan.feesOutstandingPaise - fAlloc;
+            const extraF = Math.min(remaining, fAllowed);
+            fAlloc += extraF;
+            remaining -= extraF;
+        }
+        if (remaining > 0 && loan.interestOutstandingPaise > 0) {
+            const iAllowed = loan.interestOutstandingPaise - iAlloc;
+            const extraI = Math.min(remaining, iAllowed);
+            iAlloc += extraI;
+            remaining -= extraI;
+        }
+        if (remaining > 0 && loan.principalOutstandingPaise > 0) {
+            const pAllowed = loan.principalOutstandingPaise - pAlloc;
+            const extraP = Math.min(remaining, pAllowed);
+            pAlloc += extraP;
+            remaining -= extraP;
         }
 
         loan.transactions.push({
