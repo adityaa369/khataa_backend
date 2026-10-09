@@ -43,7 +43,7 @@ const allowedOrigins = new Set([
 const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
-    if (allowedOrigins.has(origin)) return callback(null, true);
+    if (allowedOrigins.has(origin) || origin.startsWith('http://localhost:')) return callback(null, true);
     return callback(new Error('CORS_ORIGIN_NOT_ALLOWED'));
   },
   credentials: true,
