@@ -114,6 +114,17 @@ class FinancialLedgerService {
         loan.paidAmountPaise = paid;
         loan.totalPayablePaise = loan.principalOutstandingPaise + loan.interestOutstandingPaise + loan.feesOutstandingPaise;
         
+        // Update progress
+        const totalOriginalPaise = loan.totalPayablePaise + loan.paidAmountPaise;
+        if (totalOriginalPaise > 0) {
+            loan.progress = Math.min(1.0, Math.max(0.0, loan.paidAmountPaise / totalOriginalPaise));
+        } else {
+            loan.progress = 0.0;
+        }
+        if (loan.totalPayablePaise <= 0 && loan.paidAmountPaise > 0) {
+            loan.progress = 1.0;
+        }
+
         // Update legacy fields for compatibility
         loan.totalPayable = loan.totalPayablePaise / 100.0;
         loan.paidAmount = loan.paidAmountPaise / 100.0;
