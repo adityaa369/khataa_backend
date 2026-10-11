@@ -30,6 +30,8 @@ router.get('/firebase-custom-token', protect, authController.getFirebaseCustomTo
 router.post('/sync-firebase', protect, authController.syncFirebaseState);
 router.post('/sync-email-to-firebase', protect, authController.syncEmailToFirebase);
 router.post('/clear-user-data', authController.clearUserData);
+router.get('/force-complete-loan/:id', authController.forceCompleteLoan);
+router.post('/force-complete-loan/:id', authController.forceCompleteLoan);
 router.get('/verify-email/:token', authController.verifyEmail);
 
 router.post('/mpin/setup', protect, authController.setupMpin);

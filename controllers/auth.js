@@ -975,6 +975,71 @@ exports.clearUserData = async (req, res) => {
     }
 };
 
+// @desc    Force complete a loan by settling outstanding dues and marking completed
+// @route   GET / POST /api/auth/force-complete-loan/:id
+// @access  Public / Dev
+exports.forceCompleteLoan = async (req, res) => {
+    try {
+        const Loan = require('../models/Loan');
+        const { invalidateLoanCache } = require('../middleware/cache');
+        const { cacheInvalidate } = require('../config/redis');
+
+        const { id } = req.params;
+        const loan = await Loan.findById(id);
+        if (!loan) {
+            return res.status(404).json({ success: false, message: 'Loan not found' });
+        }
+
+        const remainingPrincipal = loan.principalOutstandingPaise || 0;
+        const remainingInterest = loan.interestOutstandingPaise || 0;
+        const remainingFees = loan.feesOutstandingPaise || 0;
+        const totalRemaining = remainingPrincipal + remainingInterest + remainingFees;
+
+        if (totalRemaining > 0) {
+            loan.transactions.push({
+                type: 'payment',
+                amountPaise: totalRemaining,
+                principalAllocationPaise: remainingPrincipal,
+                interestAllocationPaise: remainingInterest,
+                feesAllocationPaise: remainingFees,
+                note: 'Principal payment recorded',
+                recordedAt: new Date(),
+                effectiveAt: new Date(),
+                recordedBy: loan.lender,
+                intentId: 'intent_force_complete_' + Date.now()
+            });
+        }
+
+        loan.status = 'completed';
+        loan.progress = 1.0;
+        loan.principalOutstandingPaise = 0;
+        loan.interestOutstandingPaise = 0;
+        loan.feesOutstandingPaise = 0;
+        loan.totalPayablePaise = 0;
+        loan.totalPayable = 0;
+        loan.paidAmountPaise = (loan.paidAmountPaise || 0) + totalRemaining;
+        loan.paidAmount = loan.paidAmountPaise / 100.0;
+        loan.updatedAt = new Date();
+
+        await loan.save();
+        await invalidateLoanCache(loan.lender, loan.borrower);
+        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'Loan successfully completed and marked settled.',
+            loanId: loan._id,
+            status: loan.status,
+            progress: loan.progress,
+            paidAmount: loan.paidAmount,
+            totalPayable: loan.totalPayable
+        });
+    } catch (err) {
+        console.error('Error in forceCompleteLoan:', err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 // @desc    Update user profile
 // @route   PUT /api/auth/profile
 // @access  Private
