@@ -1317,6 +1317,10 @@ exports.downloadNoc = async (req, res) => {
         if (interestTxns.length > 0) {
             const totalInterestPaise = interestTxns.reduce((sum, t) => sum + (t.amountPaise || (t.amount ? t.amount * 100 : 0)), 0);
             totalInterestRupees = totalInterestPaise / 100;
+        } else if (totalPaidRupees > principalRupees) {
+            totalInterestRupees = totalPaidRupees - principalRupees;
+        } else if (loan.interestRate > 0) {
+            totalInterestRupees = (principalRupees * (loan.interestRate / 100) * (loan.durationMonths || 1));
         }
 
         const totalSettledValue = totalPaidRupees > 0 ? totalPaidRupees : (principalRupees + totalInterestRupees);
@@ -1329,7 +1333,10 @@ exports.downloadNoc = async (req, res) => {
         const lenderPhone = lenderUser?.phone ? `+91 ${lenderUser.phone}` : 'N/A';
         const borrowerName = loan.borrowerName || (borrowerUser ? `${borrowerUser.firstName || ''} ${borrowerUser.lastName || ''}`.trim() : 'Borrower');
         const borrowerPhone = loan.borrowerPhone ? `+91 ${loan.borrowerPhone}` : (borrowerUser?.phone ? `+91 ${borrowerUser.phone}` : 'N/A');
-        const borrowerAadhaar = loan.borrowerAadhar || (borrowerUser ? borrowerUser.aadhar : 'N/A') || 'N/A';
+        
+        const rawAadhaar = loan.borrowerAadhar || (borrowerUser ? borrowerUser.aadhar : null);
+        const hasAadhaar = rawAadhaar && rawAadhaar !== 'N/A' && rawAadhaar.trim().length > 0;
+        const borrowerAadhaar = hasAadhaar ? rawAadhaar.trim() : null;
 
         const loanTypeStr = (loan.loanType || loan.type || 'Personal').toLowerCase();
         let displayType = 'Personal Credit';
@@ -1337,8 +1344,16 @@ exports.downloadNoc = async (req, res) => {
         else if (loanTypeStr.includes('business')) displayType = 'Business Credit';
         else if (loanTypeStr.includes('hand')) displayType = 'Hand Credit';
 
-        const startDateStr = new Date(loan.activatedAt || loan.startDate || loan.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-        const closeDateStr = new Date(loan.updatedAt || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        const startDateVal = loan.activatedAt || loan.startDate || loan.createdAt;
+        const startDateStr = startDateVal && !isNaN(new Date(startDateVal).getTime())
+            ? new Date(startDateVal).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+            : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+        const closeDateVal = loan.closedAt || loan.updatedAt;
+        const closeDateStr = closeDateVal && !isNaN(new Date(closeDateVal).getTime())
+            ? new Date(closeDateVal).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+            : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
         const issueDateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
         const doc = new PDFDocument({ margin: 40, size: 'A4' });
@@ -1389,7 +1404,10 @@ exports.downloadNoc = async (req, res) => {
 
         doc.fontSize(9).font('Helvetica-Bold').text('BORROWER DETAILS', 300, box1Y + 8);
         doc.font('Helvetica').fontSize(9).text(`Name: ${borrowerName}`, 300, box1Y + 22);
-        doc.text(`Phone: ${borrowerPhone}  |  Aadhaar: ${borrowerAadhaar}`, 300, box1Y + 36);
+        const borrowerIdText = borrowerAadhaar
+            ? `Phone: ${borrowerPhone}  |  Aadhaar: ${borrowerAadhaar}`
+            : `Phone: ${borrowerPhone}  |  Status: Verified Borrower`;
+        doc.text(borrowerIdText, 300, box1Y + 36);
 
         doc.y = box1Y + 70;
         doc.moveDown(0.5);
