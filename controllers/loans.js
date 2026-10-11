@@ -1278,65 +1278,235 @@ exports.downloadNoc = async (req, res) => {
     try {
         const PDFDocument = require('pdfkit');
         const Loan = require('../models/Loan');
+        const User = require('../models/User');
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+
         const loan = await Loan.findById(req.params.id);
-        
         if (!loan) {
             return res.status(404).json({ success: false, message: 'Loan not found' });
         }
-        
-        if (loan.lender.toString() !== req.user.id && loan.borrower.toString() !== req.user.id) {
-            return res.status(403).json({ success: false, message: 'Not authorized' });
+
+        const isLender = loan.lender && (loan.lender.toString() === req.user.id);
+        const isBorrower = loan.borrower && (loan.borrower.toString() === req.user.id);
+        if (!isLender && !isBorrower) {
+            return res.status(403).json({ success: false, message: 'Not authorized to download this NOC' });
         }
 
-        if (loan.status !== 'completed' && loan.status !== 'closed') {
-            return res.status(400).json({ success: false, message: 'Loan is not fully paid yet' });
+        FinancialLedgerService.deriveBalances(loan);
+
+        const totalOutstanding = (loan.principalOutstandingPaise || 0) + (loan.interestOutstandingPaise || 0) + (loan.feesOutstandingPaise || 0);
+        const isSettled = loan.status === 'completed' || loan.status === 'closed' || totalOutstanding <= 0;
+
+        if (!isSettled) {
+            return res.status(400).json({ success: false, message: 'Credit is not fully settled yet. Outstanding dues remain.' });
         }
 
-        const doc = new PDFDocument({ margin: 50, size: 'A4' });
-        
+        if (totalOutstanding <= 0 && loan.status !== 'completed' && loan.status !== 'closed') {
+            loan.status = 'completed';
+            loan.progress = 1.0;
+            await loan.save();
+        }
+
+        // Authoritative amounts (in Rupees)
+        const principalRupees = loan.amountPaise ? (loan.amountPaise / 100) : (loan.amount || 0);
+        const totalPaidRupees = loan.paidAmountPaise ? (loan.paidAmountPaise / 100) : (loan.paidAmount || 0);
+
+        let totalInterestRupees = 0;
+        const allTransactions = loan.transactions || [];
+        const interestTxns = allTransactions.filter(t => t.type === 'interest_accrued');
+        if (interestTxns.length > 0) {
+            const totalInterestPaise = interestTxns.reduce((sum, t) => sum + (t.amountPaise || (t.amount ? t.amount * 100 : 0)), 0);
+            totalInterestRupees = totalInterestPaise / 100;
+        }
+
+        const totalSettledValue = totalPaidRupees > 0 ? totalPaidRupees : (principalRupees + totalInterestRupees);
+
+        // Fetch User profiles
+        const lenderUser = await User.findOne({ id: loan.lender });
+        const borrowerUser = loan.borrower ? await User.findOne({ id: loan.borrower }) : null;
+
+        const lenderName = lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'Lender';
+        const lenderPhone = lenderUser?.phone ? `+91 ${lenderUser.phone}` : 'N/A';
+        const borrowerName = loan.borrowerName || (borrowerUser ? `${borrowerUser.firstName || ''} ${borrowerUser.lastName || ''}`.trim() : 'Borrower');
+        const borrowerPhone = loan.borrowerPhone ? `+91 ${loan.borrowerPhone}` : (borrowerUser?.phone ? `+91 ${borrowerUser.phone}` : 'N/A');
+        const borrowerAadhaar = loan.borrowerAadhar || (borrowerUser ? borrowerUser.aadhar : 'N/A') || 'N/A';
+
+        const loanTypeStr = (loan.loanType || loan.type || 'Personal').toLowerCase();
+        let displayType = 'Personal Credit';
+        if (loanTypeStr.includes('interest')) displayType = 'Interest Credit';
+        else if (loanTypeStr.includes('business')) displayType = 'Business Credit';
+        else if (loanTypeStr.includes('hand')) displayType = 'Hand Credit';
+
+        const startDateStr = new Date(loan.activatedAt || loan.startDate || loan.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        const closeDateStr = new Date(loan.updatedAt || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        const issueDateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+        const doc = new PDFDocument({ margin: 40, size: 'A4' });
+
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'attachment; filename="NOC_' + loan._id + '.pdf"');
-        
+        res.setHeader('Content-Disposition', 'inline; filename="NOC_' + loan._id + '.pdf"');
+
         doc.pipe(res);
 
-        doc.fontSize(24).font('Helvetica-Bold').text('NO DUES CERTIFICATE', { align: 'center' });
-        doc.moveDown();
-        doc.fontSize(12).font('Helvetica').text('Date: ' + new Date().toLocaleDateString(), { align: 'right' });
-        doc.moveDown(2);
-        
-        doc.fontSize(14).font('Helvetica-Bold').text('To Whom It May Concern,');
-        doc.moveDown();
-        
-        const borrowerName = loan.borrowerName || 'Borrower';
-        doc.fontSize(12).font('Helvetica').text(
-            'This is to certify that the credit agreement (Reference ID: ' + loan._id + ') between ' +
-            'the Lender and the Borrower (' + borrowerName + ') has been fully settled.'
-        );
-        doc.moveDown();
-        
-        doc.rect(50, doc.y, 500, 150).stroke();
+        // --- Outer Border ---
+        doc.rect(20, 20, 555, 802).lineWidth(1.5).stroke('#1E3A8A');
+        doc.rect(23, 23, 549, 796).lineWidth(0.5).stroke('#93C5FD');
+
+        // --- Header ---
+        doc.fontSize(20).font('Helvetica-Bold').fillColor('#1E3A8A').text('NO DUES CERTIFICATE (NOC)', 40, 45, { align: 'center' });
+        doc.fontSize(10).font('Helvetica').fillColor('#64748B').text('DEBT SETTLEMENT & CLEARANCE CERTIFICATION', { align: 'center' });
         doc.moveDown(0.5);
-        doc.fontSize(12).font('Helvetica-Bold').text('Credit Details', { align: 'center' });
-        doc.moveDown();
-        doc.font('Helvetica').text('Principal Amount: ' + (loan.amount / 100) + ' INR', 70);
-        doc.text('Total Paid: ' + (loan.paidAmount / 100) + ' INR', 70);
-        const startDateStr = new Date(loan.startDate || loan.createdAt).toLocaleDateString();
-        doc.text('Start Date: ' + startDateStr, 70);
-        doc.moveDown(2);
-        
-        doc.fontSize(12).font('Helvetica').text(
-            'This electronically generated document confirms that there are no outstanding dues remaining against this credit.',
-            50
+
+        // Line divider
+        doc.strokeColor('#CBD5E1').lineWidth(1).moveTo(40, doc.y).lineTo(555, doc.y).stroke();
+        doc.moveDown(0.8);
+
+        // Meta Info
+        const metaY = doc.y;
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#334155').text('Certificate Ref: ', 40, metaY, { continued: true })
+            .font('Helvetica').text(`NOC-${loan._id.toString().toUpperCase()}`);
+        doc.fontSize(9).font('Helvetica-Bold').text('Date of Issue: ', 380, metaY, { continued: true })
+            .font('Helvetica').text(issueDateStr);
+        doc.moveDown(1.2);
+
+        // Declaration
+        doc.fontSize(10).font('Helvetica').fillColor('#1E293B').text(
+            `This is an authoritative certification that the credit agreement detailed below, executed between the Lender and the Borrower, has been FULLY AND FINALLY REPAID. All principal, interest, and applicable fees have been completely settled with ZERO outstanding liability.`,
+            40,
+            doc.y,
+            { align: 'justify', lineGap: 3 }
         );
-        
-        doc.moveDown(4);
-        doc.font('Helvetica-Bold').text('Authorized Signatory', { align: 'right' });
+        doc.moveDown(1);
+
+        // --- Parties Box ---
+        const box1Y = doc.y;
+        doc.rect(40, box1Y, 515, 60).fillAndStroke('#F8FAFC', '#E2E8F0');
+        doc.fillColor('#0F172A');
+
+        doc.fontSize(9).font('Helvetica-Bold').text('LENDER DETAILS', 50, box1Y + 8);
+        doc.font('Helvetica').fontSize(9).text(`Name: ${lenderName}`, 50, box1Y + 22);
+        doc.text(`Phone: ${lenderPhone}`, 50, box1Y + 36);
+
+        doc.fontSize(9).font('Helvetica-Bold').text('BORROWER DETAILS', 300, box1Y + 8);
+        doc.font('Helvetica').fontSize(9).text(`Name: ${borrowerName}`, 300, box1Y + 22);
+        doc.text(`Phone: ${borrowerPhone}  |  Aadhaar: ${borrowerAadhaar}`, 300, box1Y + 36);
+
+        doc.y = box1Y + 70;
+        doc.moveDown(0.5);
+
+        // --- Credit Summary Box ---
+        const box2Y = doc.y;
+        doc.rect(40, box2Y, 515, 110).fillAndStroke('#F0FDF4', '#86EFAC');
+        doc.fontSize(10).font('Helvetica-Bold').fillColor('#166534').text('OFFICIAL CREDIT & SETTLEMENT BREAKDOWN', 50, box2Y + 10, { align: 'center' });
+        doc.moveDown(0.5);
+
+        const leftColX = 55;
+        const rightColX = 310;
+        let lineY = box2Y + 30;
+
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#14532D');
+        doc.text('Credit Type:', leftColX, lineY);
+        doc.font('Helvetica').text(displayType, leftColX + 110, lineY);
+        doc.font('Helvetica-Bold').text('Principal Disbursed:', rightColX, lineY);
+        doc.font('Helvetica').text(`Rs. ${principalRupees.toLocaleString('en-IN')}`, rightColX + 115, lineY);
+
+        lineY += 16;
+        doc.font('Helvetica-Bold').text('Duration:', leftColX, lineY);
+        doc.font('Helvetica').text(`${loan.durationMonths || 0} ${loan.durationType || 'Months'}`, leftColX + 110, lineY);
+        doc.font('Helvetica-Bold').text('Interest Incurred:', rightColX, lineY);
+        doc.font('Helvetica').text(`Rs. ${totalInterestRupees.toLocaleString('en-IN')}`, rightColX + 115, lineY);
+
+        lineY += 16;
+        doc.font('Helvetica-Bold').text('Disbursed Date:', leftColX, lineY);
+        doc.font('Helvetica').text(startDateStr, leftColX + 110, lineY);
+        doc.font('Helvetica-Bold').text('Total Settled Amount:', rightColX, lineY);
+        doc.font('Helvetica').text(`Rs. ${totalSettledValue.toLocaleString('en-IN')}`, rightColX + 115, lineY);
+
+        lineY += 16;
+        doc.font('Helvetica-Bold').text('Settlement Date:', leftColX, lineY);
+        doc.font('Helvetica').text(closeDateStr, leftColX + 110, lineY);
+        doc.font('Helvetica-Bold').fillColor('#15803D').text('Outstanding Balance:', rightColX, lineY);
+        doc.font('Helvetica-Bold').fillColor('#15803D').text('Rs. 0.00 (NIL / SETTLED)', rightColX + 115, lineY);
+
+        doc.y = box2Y + 120;
+        doc.moveDown(0.5);
+
+        // --- Transaction Proof Table ---
+        doc.fontSize(10).font('Helvetica-Bold').fillColor('#1E3A8A').text('PAYMENT SETTLEMENT PROOF (AUDIT TRAIL)', 40, doc.y);
+        doc.moveDown(0.4);
+
+        const tableTop = doc.y;
+        doc.rect(40, tableTop, 515, 20).fillAndStroke('#E2E8F0', '#CBD5E1');
+        doc.fillColor('#0F172A').font('Helvetica-Bold').fontSize(8.5);
+        doc.text('#', 48, tableTop + 5);
+        doc.text('Date', 70, tableTop + 5);
+        doc.text('Transaction Type / Note', 160, tableTop + 5);
+        doc.text('Amount (INR)', 410, tableTop + 5);
+        doc.text('Status', 485, tableTop + 5);
+
+        const paymentTxns = allTransactions.filter(t => t.type === 'payment' || t.type === 'interest_payment');
+        let currentY = tableTop + 20;
+
+        if (paymentTxns.length === 0) {
+            doc.rect(40, currentY, 515, 20).fillAndStroke('#FFFFFF', '#E2E8F0');
+            doc.font('Helvetica').fontSize(8.5).fillColor('#64748B').text('Full settlement recorded via authorized closure.', 50, currentY + 5);
+            currentY += 20;
+        } else {
+            paymentTxns.slice(0, 10).forEach((txn, index) => {
+                const isEven = index % 2 === 0;
+                doc.rect(40, currentY, 515, 18).fillAndStroke(isEven ? '#FFFFFF' : '#F8FAFC', '#E2E8F0');
+
+                const tDate = new Date(txn.effectiveAt || txn.recordedAt || Date.now()).toLocaleDateString('en-IN');
+                const tAmt = ((txn.amountPaise || (txn.amount ? txn.amount * 100 : 0)) / 100).toLocaleString('en-IN');
+                let tDesc = txn.note || 'Payment Recorded';
+                if (txn.principalAllocationPaise > 0 && txn.interestAllocationPaise > 0) {
+                    tDesc = `Principal: Rs.${txn.principalAllocationPaise/100} + Interest: Rs.${txn.interestAllocationPaise/100}`;
+                } else if (txn.principalAllocationPaise > 0) {
+                    tDesc = 'Principal Repayment';
+                } else if (txn.interestAllocationPaise > 0) {
+                    tDesc = 'Interest Repayment';
+                }
+
+                doc.fillColor('#1E293B').font('Helvetica').fontSize(8);
+                doc.text(String(index + 1), 48, currentY + 4);
+                doc.text(tDate, 70, currentY + 4);
+                doc.text(tDesc, 160, currentY + 4, { width: 240, ellipsis: true });
+                doc.font('Helvetica-Bold').text(`Rs. ${tAmt}`, 410, currentY + 4);
+                doc.fillColor('#166534').text('CONFIRMED', 485, currentY + 4);
+
+                currentY += 18;
+            });
+        }
+
+        doc.y = currentY + 15;
+
+        // --- Legal Discharge Statement ---
+        doc.fontSize(8.5).font('Helvetica-Oblique').fillColor('#475569').text(
+            'Declaration: The Lender confirms that no further claims, pledges, collateral demands, or interest payments remain active against this account. This electronically verified No Objection Certificate (NOC) serves as irrefutable legal clearance under the Khaata Digital Ledger system.',
+            40,
+            doc.y,
+            { align: 'justify', lineGap: 2 }
+        );
+        doc.moveDown(1.5);
+
+        // --- Signature Section ---
+        const sigY = doc.y;
+        doc.rect(40, sigY, 230, 45).fillAndStroke('#F8FAFC', '#E2E8F0');
+        doc.rect(325, sigY, 230, 45).fillAndStroke('#F8FAFC', '#E2E8F0');
+
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#0F172A').text('LENDER AUTHORIZATION', 50, sigY + 6);
+        doc.font('Helvetica').fontSize(7.5).fillColor('#64748B').text(`Digitally Certified by: ${lenderName}`, 50, sigY + 18);
+        doc.text(`Status: DUES CLEARED & SATISFIED`, 50, sigY + 30);
+
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#0F172A').text('PLATFORM VERIFICATION SEAL', 335, sigY + 6);
+        doc.font('Helvetica').fontSize(7.5).fillColor('#64748B').text('Khaata Financial Protocol V2', 335, sigY + 18);
+        doc.fillColor('#15803D').text('VERIFIED: ZERO OUTSTANDING DUES', 335, sigY + 30);
 
         doc.end();
     } catch (err) {
-        console.error(err);
+        console.error('[DownloadNOC] Error:', err);
         if (!res.headersSent) {
-            res.status(500).json({ success: false, message: 'Failed to generate NOC' });
+            res.status(500).json({ success: false, message: 'Failed to generate NOC: ' + err.message });
         }
     }
 };

@@ -31,8 +31,10 @@ exports.initiatePayment = async (req, res) => {
         }
 
         FinancialLedgerService.deriveBalances(loan);
+        const loanTypeStr = (loan.loanType || loan.type || '').toLowerCase();
+        const isInterestLoan = loanTypeStr.includes('interest') || loanTypeStr.includes('home');
         let totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
-        if (loan.type === 'interest_credit' || loan.type === 'interest') {
+        if (isInterestLoan) {
             if (paymentType === 'interest') {
                 totalOutstandingPaise = loan.interestOutstandingPaise || 0;
             } else if (paymentType === 'principal') {
@@ -211,8 +213,10 @@ exports.commitPayment = async (req, res) => {
         const amountPaise = intent.payload.amountPaise;
         const paymentType = intent.payload.paymentType;
         FinancialLedgerService.deriveBalances(loan);
+        const loanTypeStr = (loan.loanType || loan.type || '').toLowerCase();
+        const isInterestLoan = loanTypeStr.includes('interest') || loanTypeStr.includes('home');
         let totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
-        if (loan.type === 'interest_credit' || loan.type === 'interest') {
+        if (isInterestLoan) {
             if (paymentType === 'interest') {
                 totalOutstandingPaise = loan.interestOutstandingPaise || 0;
             } else if (paymentType === 'principal') {
@@ -330,8 +334,10 @@ exports.authorizeFirebasePhonePayment = async (req, res) => {
         const amountPaise = intent.payload.amountPaise;
         const paymentType = intent.payload.paymentType;
         FinancialLedgerService.deriveBalances(loan);
+        const loanTypeStr = (loan.loanType || loan.type || '').toLowerCase();
+        const isInterestLoan = loanTypeStr.includes('interest') || loanTypeStr.includes('home');
         let totalOutstandingPaise = (loan.principalOutstandingPaise != null ? loan.principalOutstandingPaise : (loan.totalPayablePaise - (loan.paidAmountPaise || 0))) || 0;
-        if (loan.type === 'interest_credit' || loan.type === 'interest') {
+        if (isInterestLoan) {
             if (paymentType === 'interest') {
                 totalOutstandingPaise = loan.interestOutstandingPaise || 0;
             } else if (paymentType === 'principal') {

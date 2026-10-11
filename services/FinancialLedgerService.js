@@ -131,45 +131,51 @@ class FinancialLedgerService {
         // Accrue interest up to effective date
         await this.accrueInterest(loan, effectiveAt);
 
-        // Overpayment check
-        const totalOutstanding = loan.principalOutstandingPaise + loan.interestOutstandingPaise + loan.feesOutstandingPaise;
-        if (amountPaise > totalOutstanding) {
-            throw new Error(`Overpayment rejected. Amount: ${amountPaise}, Outstanding: ${totalOutstanding}`);
+        const loanTypeStr = (loan.loanType || loan.type || '').toLowerCase();
+        const isInterestLoan = loanTypeStr.includes('interest') || loanTypeStr.includes('home');
+
+        if (isInterestLoan && paymentType === 'interest') {
+            if (amountPaise > (loan.interestOutstandingPaise || 0)) {
+                throw new Error(`Overpayment rejected. Amount: ${amountPaise}, Interest Outstanding: ${loan.interestOutstandingPaise || 0}`);
+            }
+        } else if (isInterestLoan && paymentType === 'principal') {
+            if (amountPaise > (loan.principalOutstandingPaise || 0)) {
+                throw new Error(`Overpayment rejected. Amount: ${amountPaise}, Principal Outstanding: ${loan.principalOutstandingPaise || 0}`);
+            }
+        } else {
+            const totalOutstanding = (loan.principalOutstandingPaise || 0) + (loan.interestOutstandingPaise || 0) + (loan.feesOutstandingPaise || 0);
+            if (amountPaise > totalOutstanding) {
+                throw new Error(`Overpayment rejected. Amount: ${amountPaise}, Outstanding: ${totalOutstanding}`);
+            }
         }
 
-        let remaining = amountPaise;
         let fAlloc = 0;
         let iAlloc = 0;
         let pAlloc = 0;
-        
-        const isInterestLoan = loan.type === 'interest_credit' || loan.type === 'interest';
 
         if (isInterestLoan && paymentType === 'interest') {
-            iAlloc = Math.min(amountPaise, loan.interestOutstandingPaise);
-            remaining = amountPaise - iAlloc;
+            iAlloc = Math.min(amountPaise, loan.interestOutstandingPaise || 0);
+            pAlloc = 0;
+            fAlloc = 0;
         } else if (isInterestLoan && paymentType === 'principal') {
-            pAlloc = Math.min(amountPaise, loan.principalOutstandingPaise);
-            remaining = amountPaise - pAlloc;
-        }
-
-        // Waterfall allocation for whatever is remaining
-        if (remaining > 0 && loan.feesOutstandingPaise > 0) {
-            const fAllowed = loan.feesOutstandingPaise - fAlloc;
-            const extraF = Math.min(remaining, fAllowed);
-            fAlloc += extraF;
-            remaining -= extraF;
-        }
-        if (remaining > 0 && loan.interestOutstandingPaise > 0) {
-            const iAllowed = loan.interestOutstandingPaise - iAlloc;
-            const extraI = Math.min(remaining, iAllowed);
-            iAlloc += extraI;
-            remaining -= extraI;
-        }
-        if (remaining > 0 && loan.principalOutstandingPaise > 0) {
-            const pAllowed = loan.principalOutstandingPaise - pAlloc;
-            const extraP = Math.min(remaining, pAllowed);
-            pAlloc += extraP;
-            remaining -= extraP;
+            pAlloc = Math.min(amountPaise, loan.principalOutstandingPaise || 0);
+            iAlloc = 0;
+            fAlloc = 0;
+        } else {
+            // Waterfall allocation for general payments or non-interest loans (hand/business)
+            let remaining = amountPaise;
+            if (remaining > 0 && loan.feesOutstandingPaise > 0) {
+                fAlloc = Math.min(remaining, loan.feesOutstandingPaise);
+                remaining -= fAlloc;
+            }
+            if (remaining > 0 && loan.interestOutstandingPaise > 0) {
+                iAlloc = Math.min(remaining, loan.interestOutstandingPaise);
+                remaining -= iAlloc;
+            }
+            if (remaining > 0 && loan.principalOutstandingPaise > 0) {
+                pAlloc = Math.min(remaining, loan.principalOutstandingPaise);
+                remaining -= pAlloc;
+            }
         }
 
         loan.transactions.push({
@@ -178,7 +184,9 @@ class FinancialLedgerService {
             feesAllocationPaise: fAlloc,
             interestAllocationPaise: iAlloc,
             principalAllocationPaise: pAlloc,
-            note: 'Principal/Interest payment recorded',
+            note: paymentType === 'interest'
+                ? 'Interest payment recorded'
+                : (paymentType === 'principal' ? 'Principal payment recorded' : 'Principal/Interest payment recorded'),
             recordedAt: new Date(),
             effectiveAt: effectiveAt,
             recordedBy: recordedBy,
