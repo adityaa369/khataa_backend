@@ -918,6 +918,8 @@ exports.syncEmailToFirebase = async (req, res) => {
 exports.clearUserData = async (req, res) => {
     try {
         const mongoose = require('mongoose');
+        const fs = require('fs');
+        const path = require('path');
         const collections = await mongoose.connection.db.listCollections().toArray();
         const deletedStats = {};
         
@@ -926,8 +928,44 @@ exports.clearUserData = async (req, res) => {
             if (name.startsWith('system.')) continue;
             
             const collection = mongoose.connection.db.collection(name);
-            const res = await collection.deleteMany({});
-            deletedStats[name] = res.deletedCount;
+            const deleteRes = await collection.deleteMany({});
+            deletedStats[name] = deleteRes.deletedCount;
+        }
+
+        // Purge uploads directory
+        try {
+            const uploadsDir = path.join(__dirname, '../uploads');
+            let filesRemoved = 0;
+            if (fs.existsSync(uploadsDir)) {
+                const files = fs.readdirSync(uploadsDir);
+                for (const file of files) {
+                    if (file !== '.gitkeep') {
+                        try {
+                            fs.unlinkSync(path.join(uploadsDir, file));
+                            filesRemoved++;
+                        } catch (_) {}
+                    }
+                }
+            }
+            deletedStats['uploads_files_deleted'] = filesRemoved;
+        } catch (_) {}
+
+        // Purge Firebase Auth users if available
+        try {
+            const admin = require('../config/firebase');
+            let nextPageToken;
+            let fbCount = 0;
+            do {
+                const listUsersResult = await admin.auth().listUsers(100, nextPageToken);
+                for (const userRecord of listUsersResult.users) {
+                    await admin.auth().deleteUser(userRecord.uid);
+                    fbCount++;
+                }
+                nextPageToken = listUsersResult.pageToken;
+            } while (nextPageToken);
+            deletedStats['firebase_auth_users'] = fbCount;
+        } catch (fbErr) {
+            deletedStats['firebase_auth_users'] = 0;
         }
         
         res.status(200).json({ success: true, message: 'User data cleared', stats: deletedStats });
