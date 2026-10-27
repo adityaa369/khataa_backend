@@ -8,7 +8,7 @@ const { validateRegister } = require('../middleware/validate');
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 5,
+    max: 15,
     message: { success: false, message: 'Too many authentication attempts, please wait.' },
 });
 
@@ -21,6 +21,7 @@ router.post('/send-otp', authLimiter, (req, res) => {
 
 router.post('/verify-otp', authLimiter, authController.verifyOtp);
 router.post('/login-password', authLimiter, authController.loginPassword);
+router.post('/reset-password', protect, authController.resetPassword);
 router.post('/send-otp-msg91', authLimiter, authController.sendOtpMsg91);
 router.post('/verify-otp-msg91', authLimiter, authController.verifyOtpMsg91);
 router.post('/register', protect, validateRegister, authController.register);

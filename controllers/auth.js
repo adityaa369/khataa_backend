@@ -199,18 +199,56 @@ exports.loginPassword = async (req, res) => {
             phoneStr = phoneStr.substring(2);
         }
 
-        const user = await User.findOne({ phone: phoneStr });
+        const user = await User.findOne({ phone: phoneStr }).select('+password');
         if (!user) {
             return res.status(400).json({ success: false, message: 'Invalid credentials. Mobile number not registered.' });
         }
 
+        if (user.isSuspended) {
+            return res.status(403).json({ success: false, message: 'Your account has been suspended. Please contact support.' });
+        }
+
         if (!user.password) {
-            return res.status(400).json({ success: false, message: 'No password set for this account. Please use OTP login or register first.' });
+            return res.status(400).json({ success: false, message: 'No password set for this account. Please tap Forgot Password to set a password via OTP.' });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(400).json({ success: false, message: 'Invalid credentials. Wrong password.' });
+        }
+
+        // Remove password hash before serializing user object
+        user.password = undefined;
+
+        let customToken = null;
+        try {
+            const admin = require('firebase-admin');
+            let fbUid = user.firebaseUid;
+            if (!fbUid) {
+                try {
+                    const fbUser = await admin.auth().getUserByPhoneNumber(`+91${phoneStr}`);
+                    fbUid = fbUser.uid;
+                } catch (_) {
+                    fbUid = `uid_${user.id}`;
+                }
+                user.firebaseUid = fbUid;
+                await User.updateOne({ _id: user._id }, { $set: { firebaseUid: fbUid } });
+            }
+            customToken = await admin.auth().createCustomToken(fbUid);
+
+            if (user.email && fbUid) {
+                try {
+                    const fbUser = await admin.auth().getUser(fbUid);
+                    if (fbUser.email !== user.email) {
+                        await admin.auth().updateUser(fbUid, {
+                            email: user.email,
+                            emailVerified: user.isEmailVerified || false
+                        });
+                    }
+                } catch (_) {}
+            }
+        } catch (fbErr) {
+            console.error('[Auth] loginPassword customToken warning:', fbErr.message);
         }
 
         const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
@@ -220,6 +258,7 @@ exports.loginPassword = async (req, res) => {
         res.status(200).json({
             success: true,
             token,
+            customToken,
             user
         });
     } catch (err) {
@@ -405,18 +444,56 @@ exports.loginPassword = async (req, res) => {
             phoneStr = phoneStr.substring(2);
         }
 
-        const user = await User.findOne({ phone: phoneStr });
+        const user = await User.findOne({ phone: phoneStr }).select('+password');
         if (!user) {
             return res.status(400).json({ success: false, message: 'Invalid credentials. Mobile number not registered.' });
         }
 
+        if (user.isSuspended) {
+            return res.status(403).json({ success: false, message: 'Your account has been suspended. Please contact support.' });
+        }
+
         if (!user.password) {
-            return res.status(400).json({ success: false, message: 'No password set for this account. Please use OTP login or register first.' });
+            return res.status(400).json({ success: false, message: 'No password set for this account. Please tap Forgot Password to set a password via OTP.' });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(400).json({ success: false, message: 'Invalid credentials. Wrong password.' });
+        }
+
+        // Remove password hash before serializing user object
+        user.password = undefined;
+
+        let customToken = null;
+        try {
+            const admin = require('firebase-admin');
+            let fbUid = user.firebaseUid;
+            if (!fbUid) {
+                try {
+                    const fbUser = await admin.auth().getUserByPhoneNumber(`+91${phoneStr}`);
+                    fbUid = fbUser.uid;
+                } catch (_) {
+                    fbUid = `uid_${user.id}`;
+                }
+                user.firebaseUid = fbUid;
+                await User.updateOne({ _id: user._id }, { $set: { firebaseUid: fbUid } });
+            }
+            customToken = await admin.auth().createCustomToken(fbUid);
+
+            if (user.email && fbUid) {
+                try {
+                    const fbUser = await admin.auth().getUser(fbUid);
+                    if (fbUser.email !== user.email) {
+                        await admin.auth().updateUser(fbUid, {
+                            email: user.email,
+                            emailVerified: user.isEmailVerified || false
+                        });
+                    }
+                } catch (_) {}
+            }
+        } catch (fbErr) {
+            console.error('[Auth] loginPassword customToken warning:', fbErr.message);
         }
 
         const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
@@ -426,6 +503,7 @@ exports.loginPassword = async (req, res) => {
         res.status(200).json({
             success: true,
             token,
+            customToken,
             user
         });
     } catch (err) {
@@ -693,62 +771,96 @@ exports.verifyMpin = async (req, res) => {
     }
 
     try {
-        const user = await User.findOne({ phone });
+        let phoneStr = phone.toString().replace(/\D/g, '');
+        if (phoneStr.startsWith('91') && phoneStr.length > 10) {
+            phoneStr = phoneStr.substring(2);
+        }
+
+        const user = await User.findOne({ phone: phoneStr });
         if (!user) {
             return res.status(401).json({ success: false, message: 'Invalid MPIN' });
         }
 
+        if (user.isSuspended) {
+            return res.status(403).json({ success: false, message: 'Your account has been suspended. Please contact support.' });
+        }
+
         const mpinCred = await MPinCredential.findOne({ userId: user._id });
         if (!mpinCred) {
-            return res.status(401).json({ success: false, message: 'Invalid MPIN' });
+            return res.status(401).json({ success: false, message: 'MPIN is not set up for this account. Please sign in with your password first.' });
         }
 
         const redisClient = getRedisClient();
-        if (!redisClient) {
-            console.error('[Auth] verifyMpin: Redis rate limiting is unavailable. Failing closed.');
-            return res.status(500).json({ success: false, message: 'Authentication service unavailable' });
-        }
-
         const rateLimitKey = `mpin_attempts:${user._id}`;
-        
-        let attempts = 0;
-        const currentAttempts = await redisClient.get(rateLimitKey);
-        if (currentAttempts && parseInt(currentAttempts) >= 5) {
-            return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
+
+        if (redisClient) {
+            const currentAttempts = await redisClient.get(rateLimitKey);
+            if (currentAttempts && parseInt(currentAttempts) >= 5) {
+                return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
+            }
+        } else {
+            if (mpinCred.lockoutUntil && mpinCred.lockoutUntil > new Date()) {
+                return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
+            } else if (mpinCred.lockoutUntil && mpinCred.lockoutUntil <= new Date()) {
+                mpinCred.failedAttempts = 0;
+                mpinCred.lockoutUntil = null;
+            }
         }
 
         const isMatch = await bcrypt.compare(mpin, mpinCred.mpinHash);
 
         if (!isMatch) {
-            attempts = await redisClient.incr(rateLimitKey);
-            if (attempts === 1) {
-                await redisClient.expire(rateLimitKey, 15 * 60);
-            }
-            if (attempts >= 5) {
-                return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
+            if (redisClient) {
+                const attempts = await redisClient.incr(rateLimitKey);
+                if (attempts === 1) {
+                    await redisClient.expire(rateLimitKey, 15 * 60);
+                }
+                if (attempts >= 5) {
+                    return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
+                }
+            } else {
+                mpinCred.failedAttempts = (mpinCred.failedAttempts || 0) + 1;
+                if (mpinCred.failedAttempts >= 5) {
+                    mpinCred.lockoutUntil = new Date(Date.now() + 15 * 60 * 1000);
+                    await mpinCred.save();
+                    return res.status(429).json({ success: false, message: 'Too many failed attempts. Account locked for 15 minutes.' });
+                }
+                await mpinCred.save();
             }
             return res.status(401).json({ success: false, message: 'Invalid MPIN' });
         }
 
-        await redisClient.del(rateLimitKey);
+        if (redisClient) {
+            await redisClient.del(rateLimitKey);
+        } else if (mpinCred.failedAttempts > 0 || mpinCred.lockoutUntil) {
+            mpinCred.failedAttempts = 0;
+            mpinCred.lockoutUntil = null;
+            await mpinCred.save();
+        }
 
-        const admin = require('firebase-admin');
-        const customToken = await admin.auth().createCustomToken(mpinCred.firebaseUid);
+        let customToken = null;
+        try {
+            const admin = require('firebase-admin');
+            const targetUid = mpinCred.firebaseUid || user.firebaseUid || `uid_${user.id}`;
+            customToken = await admin.auth().createCustomToken(targetUid);
 
-        // SYNC EMAIL TO FIREBASE (self-heal on every MPIN login)
-        if (user.email && mpinCred.firebaseUid) {
-            try {
-                const fbUser = await admin.auth().getUser(mpinCred.firebaseUid);
-                if (fbUser.email !== user.email) {
-                    await admin.auth().updateUser(mpinCred.firebaseUid, {
-                        email: user.email,
-                        emailVerified: user.isEmailVerified || false
-                    });
-                    console.log(`[Auth] verifyMpin: synced email to Firebase for user ${user.id}`);
+            // SYNC EMAIL TO FIREBASE (self-heal on every MPIN login)
+            if (user.email && targetUid) {
+                try {
+                    const fbUser = await admin.auth().getUser(targetUid);
+                    if (fbUser.email !== user.email) {
+                        await admin.auth().updateUser(targetUid, {
+                            email: user.email,
+                            emailVerified: user.isEmailVerified || false
+                        });
+                        console.log(`[Auth] verifyMpin: synced email to Firebase for user ${user.id}`);
+                    }
+                } catch (syncErr) {
+                    console.error(`[Auth] verifyMpin: email sync failed for user ${user.id}: ${syncErr.message}`);
                 }
-            } catch (syncErr) {
-                console.error(`[Auth] verifyMpin: email sync failed for user ${user.id}: ${syncErr.message}`);
             }
+        } catch (fbErr) {
+            console.error('[Auth] verifyMpin customToken warning:', fbErr.message);
         }
 
         const jwt = require('jsonwebtoken');
@@ -756,10 +868,32 @@ exports.verifyMpin = async (req, res) => {
             expiresIn: '30d'
         });
 
-        res.status(200).json({ success: true, customToken, token });
+        res.status(200).json({ success: true, customToken, token, user });
     } catch (err) {
         console.error('[Auth] verifyMpin error:', err.message);
         res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// @desc    Reset password for authenticated user (after OTP verification)
+// @route   POST /api/auth/reset-password
+// @access  Private
+exports.resetPassword = async (req, res) => {
+    const { password } = req.body;
+    if (!password || password.length < 6) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    }
+    try {
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        await User.findOneAndUpdate(
+            { id: req.user.id },
+            { $set: { password: hashedPassword } }
+        );
+        res.status(200).json({ success: true, message: 'Password updated successfully' });
+    } catch (err) {
+        console.error('[Auth] resetPassword error:', err.message);
+        res.status(500).json({ success: false, message: err.message });
     }
 };
 
