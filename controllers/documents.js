@@ -45,11 +45,13 @@ exports.downloadDocument = async (req, res) => {
 
         // If not uploader, check if it's attached to a loan they are part of
         if (!authorized) {
+            const escapedId = documentId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const loan = await Loan.findOne({
                 $or: [
                     { documentId: documentId },
                     { documentUrl: documentId },
-                    { documentIds: documentId }
+                    { documentIds: documentId },
+                    { documentId: { $regex: `(^|,)${escapedId}(,|$)` } }
                 ]
             });
 

@@ -203,6 +203,11 @@ exports.createLoan = async (req, res) => {
             }
         }
 
+        const normalizedDocumentIds = Array.isArray(documentIds)
+            ? documentIds.filter(Boolean).map(String)
+            : (documentId ? String(documentId).split(',').map(s => s.trim()).filter(Boolean) : []);
+        const effectiveDocumentId = documentId || (normalizedDocumentIds.length > 0 ? normalizedDocumentIds.join(',') : undefined);
+
         const loan = await Loan.create({
             lender: req.user.id,
             borrower: borrower.id,
@@ -219,7 +224,8 @@ exports.createLoan = async (req, res) => {
             status: 'pending_approval',
             transaction_id: effectiveTransactionId,
             documentUrl,
-            documentId
+            documentId: effectiveDocumentId,
+            documentIds: normalizedDocumentIds
         });
         
         await invalidateLoanCache(loan.lender, loan.borrower);

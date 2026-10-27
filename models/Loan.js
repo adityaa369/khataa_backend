@@ -80,6 +80,10 @@ const LoanSchema = new mongoose.Schema({
         type: String,
         required: false
     },
+    documentIds: {
+        type: [String],
+        default: []
+    },
     paidAmount: {
         type: Number,
         default: 0
