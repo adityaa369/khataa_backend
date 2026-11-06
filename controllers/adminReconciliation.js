@@ -10,12 +10,13 @@ exports.getReconciliationOverview = async (req, res) => {
     res.status(200).json({
         success: true,
         data: {
-            status: criticalIncidents > 0 ? '?? FINANCIAL INTEGRITY ISSUE' : '?? ALL SYSTEMS BALANCED',
+            status: criticalIncidents > 0 ? '🔴 FINANCIAL INTEGRITY ISSUE' : '🟢 ALL SYSTEMS BALANCED',
             loansReconciled: '100%',
             chitsReconciled: '100%',
-            ledgerBalanced: true,
+            ledgerBalanced: criticalIncidents === 0 && openIncidents === 0,
             openIncidents,
             criticalIncidents,
+            totalIncidents,
             lastRun: new Date()
         }
     });

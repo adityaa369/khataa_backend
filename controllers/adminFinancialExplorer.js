@@ -1,10 +1,10 @@
-﻿const Loan = require('../models/Loan');
+const Loan = require('../models/Loan');
 const SecurityEvent = require('../models/SecurityEvent');
 const ReconciliationIncident = require('../models/ReconciliationIncident');
 const LedgerEntry = require('../models/LedgerEntry');
+const Transaction = require('../models/Transaction');
 const { getMetricsSnapshot } = require('../middleware/metrics');
 
-// Helper to provide standard metadata
 const getMeta = (source, window = '24h') => ({
     lastVerifiedAt: new Date().toISOString(),
     source,
@@ -15,24 +15,31 @@ exports.getPaymentsOverview = async (req, res) => {
     try {
         const timeWindow = new Date(Date.now() - 24 * 60 * 60 * 1000); // 24h
 
-        // Historical Truth (MongoDB)
-        const [committedCount, rejectedCount, loanAgg] = await Promise.all([
+        const [committedEvents, rejectedEvents, txAgg, ledgerAgg] = await Promise.all([
             SecurityEvent.countDocuments({ eventType: 'LOAN_PAYMENT_COMMITTED', createdAt: { $gte: timeWindow } }),
-            SecurityEvent.countDocuments({ eventType: 'OVERPAYMENT_ATTEMPT', createdAt: { $gte: timeWindow } }), // e.g., rejected payments
-            require('../models/Transaction').aggregate([
-                { 
-                    $match: { 
-                        type: { $in: ["PAYMENT"] },
-                        effectiveAt: { $gte: timeWindow }
-                    } 
+            SecurityEvent.countDocuments({ eventType: 'OVERPAYMENT_ATTEMPT', createdAt: { $gte: timeWindow } }),
+            Transaction.aggregate([
+                {
+                    $match: {
+                        type: { $in: ['PAYMENT'] },
+                        createdAt: { $gte: timeWindow }
+                    }
                 },
-                { $group: { _id: null, volume: { $sum: "$amountPaise" } } }
+                { $group: { _id: null, volume: { $sum: '$amountPaise' }, count: { $sum: 1 } } }
+            ]),
+            LedgerEntry.aggregate([
+                {
+                    $match: {
+                        type: 'CREDIT',
+                        createdAt: { $gte: timeWindow }
+                    }
+                },
+                { $group: { _id: null, volume: { $sum: '$amountPaise' }, count: { $sum: 1 } } }
             ])
         ]);
 
-        const historicalVolumePaise = loanAgg.length > 0 ? loanAgg[0].volume : 0;
-
-        // Live Process Telemetry
+        const historicalVolumePaise = txAgg[0]?.volume || ledgerAgg[0]?.volume || 0;
+        const committedCount = Math.max(committedEvents, txAgg[0]?.count || 0, ledgerAgg[0]?.count || 0);
         const processMetrics = getMetricsSnapshot();
 
         res.status(200).json({
@@ -40,7 +47,7 @@ exports.getPaymentsOverview = async (req, res) => {
             data: {
                 historical: {
                     paymentsCommitted: committedCount,
-                    paymentsRejected: rejectedCount,
+                    paymentsRejected: rejectedEvents,
                     repaymentVolumePaise: historicalVolumePaise
                 },
                 process: {
@@ -62,28 +69,27 @@ exports.getPaymentsOverview = async (req, res) => {
 
 exports.getLoansOverview = async (req, res) => {
     try {
-        const stats = await Loan.aggregate([
-            { $match: { status: { $in: ['active', 'pending_approval', 'completed', 'rejected'] } } },
-            { 
-                $group: { 
-                    _id: "$status", 
-                    count: { $sum: 1 },
-                    totalPayablePaise: { 
-                        $sum: { 
-                            $cond: [{ $eq: ["$status", "active"] }, "$totalPayablePaise", 0] 
-                        } 
-                    }
-                } 
-            }
-        ]);
+        const allLoans = await Loan.find({
+            status: { $in: ['active', 'pending_approval', 'completed', 'rejected'] }
+        }).select('status amount amountPaise totalPayable totalPayablePaise paidAmount paidAmountPaise principalOutstandingPaise interestOutstandingPaise').lean();
 
         const distribution = { active: 0, pending_approval: 0, completed: 0, rejected: 0 };
         let activeLoanTotalPayablePaise = 0;
 
-        stats.forEach(s => {
-            distribution[s._id] = s.count;
-            if (s._id === 'active') {
-                activeLoanTotalPayablePaise = s.totalOutstandingPaise;
+        allLoans.forEach(l => {
+            if (distribution[l.status] !== undefined) {
+                distribution[l.status]++;
+            }
+            if (l.status === 'active') {
+                if (typeof l.principalOutstandingPaise === 'number') {
+                    activeLoanTotalPayablePaise += Math.max(0, l.principalOutstandingPaise + (l.interestOutstandingPaise || 0));
+                } else if (typeof l.totalPayablePaise === 'number') {
+                    activeLoanTotalPayablePaise += Math.max(0, l.totalPayablePaise - (l.paidAmountPaise || 0));
+                } else {
+                    const totalR = l.totalPayable || l.amount || 0;
+                    const paidR = l.paidAmount || 0;
+                    activeLoanTotalPayablePaise += Math.max(0, Math.round((totalR - paidR) * 100));
+                }
             }
         });
 
@@ -131,11 +137,11 @@ exports.getLedgerReconciliation = async (req, res) => {
 
 exports.getIdempotencyMetrics = async (req, res) => {
     try {
-        const timeWindow = new Date(Date.now() - 24 * 60 * 60 * 1000); // 24h
+        const timeWindow = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-        const historicalReplays = await SecurityEvent.countDocuments({ 
-            eventType: 'IDEMPOTENCY_REPLAY', 
-            createdAt: { $gte: timeWindow } 
+        const historicalReplays = await SecurityEvent.countDocuments({
+            eventType: 'IDEMPOTENCY_REPLAY',
+            createdAt: { $gte: timeWindow }
         });
 
         const processMetrics = getMetricsSnapshot();

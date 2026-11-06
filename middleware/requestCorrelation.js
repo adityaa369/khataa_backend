@@ -1,8 +1,8 @@
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const { asyncLocalStorage } = require('../utils/asyncContext');
 
 module.exports = (req, res, next) => {
-    const requestId = req.headers['x-request-id'] || uuidv4();
+    const requestId = req.headers['x-request-id'] || crypto.randomUUID();
     req.id = requestId;
     res.setHeader('X-Request-Id', requestId);
     

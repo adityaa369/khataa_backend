@@ -17,6 +17,11 @@ const app = express();
 // Trust the reverse proxy (Render) so rate limiting works correctly
 app.set('trust proxy', 1);
 
+const requestCorrelation = require('./middleware/requestCorrelation');
+app.use(requestCorrelation);
+const { metricsMiddleware } = require('./middleware/metrics');
+app.use(metricsMiddleware);
+
 
 // ─── Security Headers ───────────────────────────────────────────────────────
 app.use(helmet({
@@ -27,6 +32,8 @@ app.use(helmet({
 // ─── CORS ───────────────────────────────────────────────────────────────────
 const allowedOrigins = [
     'https://khataa-backend.onrender.com',
+    'https://ops.khatha.app',
+    'https://khatha-admin.vercel.app',
     'http://localhost:3000',
     'http://localhost:5173',
 ];
@@ -34,7 +41,7 @@ app.use(cors({
     origin: function (origin, callback) {
         // Allow requests with no origin (mobile apps, Postman, server-to-server)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) return callback(null, true);
+        if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app') || origin.endsWith('.khatha.app')) return callback(null, true);
         return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -93,6 +100,9 @@ const chitFundRoutes = require('./routes/chitFunds');
 const documentRoutes = require('./routes/documents');
 const adminRoutes = require('./routes/admin');
 const intentRoutes = require('./routes/intents');
+const financialKillSwitch = require('./middleware/financialKillSwitch');
+
+app.use(financialKillSwitch);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/loans', loanRoutes);

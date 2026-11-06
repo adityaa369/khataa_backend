@@ -1,83 +1,157 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Loan = require('../models/Loan');
+const CreditScore = require('../models/CreditScore');
 const ChitSubscription = require('../models/ChitSubscription');
+const SecurityEvent = require('../models/SecurityEvent');
 const AdminAuditLog = require('../models/AdminAuditLog');
 const { getTraceContext } = require('../utils/asyncContext');
 
 exports.getCustomerOverview = async (req, res) => {
-    const totalCustomers = await User.countDocuments();
-    const pendingKyc = await User.countDocuments({ isKycVerified: false });
-    // Mocking active sessions since it's Redis backed
-    const activeSessions = Math.floor(totalCustomers * 0.4); 
+    try {
+        const [totalCustomers, suspendedCount, emailVerifiedCount, securityAlerts] = await Promise.all([
+            User.countDocuments(),
+            User.countDocuments({ isSuspended: true }),
+            User.countDocuments({ isEmailVerified: true }),
+            SecurityEvent.countDocuments({ severity: { $in: ['HIGH', 'CRITICAL'] } })
+        ]);
 
-    res.status(200).json({
-        success: true,
-        data: {
-            totalCustomers,
-            active: totalCustomers - 14,
-            pendingKyc,
-            activeSessions,
-            securityAlerts: 19
-        }
-    });
+        const active = Math.max(0, totalCustomers - suspendedCount);
+        const pendingEmail = Math.max(0, totalCustomers - emailVerifiedCount);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                totalCustomers,
+                active,
+                suspendedCount,
+                emailVerifiedCount,
+                pendingKyc: pendingEmail,
+                activeSessions: active,
+                securityAlerts
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
 };
 
 exports.getCustomers = async (req, res) => {
-    // F2 - Simplified search
-    const users = await User.find().select('-password -pan -aadhar').sort({ createdAt: -1 }).limit(50);
-    res.status(200).json({ success: true, data: users });
+    try {
+        const search = (req.query.search || '').trim();
+        const query = search ? {
+            $or: [
+                { phone: { $regex: search, $options: 'i' } },
+                { firstName: { $regex: search, $options: 'i' } },
+                { lastName: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { city: { $regex: search, $options: 'i' } }
+            ]
+        } : {};
+
+        const users = await User.find(query)
+            .select('-password -pan -aadhar -emailVerificationToken')
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .lean();
+
+        res.status(200).json({ success: true, data: users });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
 };
 
 exports.getCustomerDetail = async (req, res) => {
-    const user = await User.findById(req.params.id).select('-password');
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    try {
+        const paramId = req.params.id;
+        const query = mongoose.Types.ObjectId.isValid(paramId)
+            ? { $or: [{ id: paramId }, { _id: paramId }] }
+            : { id: paramId };
 
-    const loans = await Loan.find({ user: user._id }).select('amountPaise status createdAt');
-    const chits = await ChitSubscription.find({ user: user._id }).populate('chitFund', 'name status');
+        const user = await User.findOne(query).select('-password -emailVerificationToken');
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    // MASK KYC DATA BY DEFAULT
-    const maskedUser = user.toObject();
-    if (maskedUser.pan) maskedUser.pan = '••••••' + maskedUser.pan.slice(-4);
-    if (maskedUser.aadhar) maskedUser.aadhar = '••••••••' + maskedUser.aadhar.slice(-4);
+        const [loans, chits, creditScore] = await Promise.all([
+            Loan.find({
+                $or: [
+                    { lender: user.id },
+                    { borrower: user.id },
+                    { borrowerPhone: user.phone }
+                ]
+            }).sort({ createdAt: -1 }).limit(50).lean(),
+            ChitSubscription.find({ user: user._id }).populate('chitFund', 'name status').lean().catch(() => []),
+            CreditScore.findOne({ user: user.id }).lean()
+        ]);
 
-    res.status(200).json({
-        success: true,
-        data: {
-            user: maskedUser,
-            loans,
-            chits,
-            timeline: [
-                { time: user.createdAt, event: 'User Registered', status: 'SUCCESS' }
-            ]
-        }
-    });
+        const maskedUser = user.toObject();
+        if (maskedUser.pan) maskedUser.pan = 'XXXXXX' + maskedUser.pan.slice(-4);
+        if (maskedUser.aadhar) maskedUser.aadhar = 'XXXXXXXX' + maskedUser.aadhar.slice(-4);
+
+        const enrichedLoans = loans.map(l => ({
+            ...l,
+            role: l.lender === user.id ? 'CREDITOR (GIVEN)' : 'COUNTERPARTY (TAKEN)',
+            amountPaise: typeof l.amountPaise === 'number' ? l.amountPaise : Math.round((l.amount || 0) * 100),
+            paidAmountPaise: typeof l.paidAmountPaise === 'number' ? l.paidAmountPaise : Math.round((l.paidAmount || 0) * 100),
+            totalPayablePaise: typeof l.totalPayablePaise === 'number' ? l.totalPayablePaise : Math.round((l.totalPayable || l.amount || 0) * 100)
+        }));
+
+        res.status(200).json({
+            success: true,
+            data: {
+                user: maskedUser,
+                loans: enrichedLoans,
+                chits,
+                creditScore,
+                timeline: [
+                    { time: user.createdAt, event: 'Account Registered on HandCredit', status: 'SUCCESS' },
+                    ...(user.isEmailVerified ? [{ time: user.updatedAt, event: 'Email Address Verified', status: 'SUCCESS' }] : []),
+                    ...(user.isSuspended ? [{ time: user.updatedAt, event: 'Account Suspended by Operator', status: 'BLOCKED' }] : [])
+                ]
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
 };
 
 exports.unmaskKYC = async (req, res) => {
-    const { reason } = req.body;
-    if (!reason) return res.status(400).json({ success: false, message: 'Mandatory reason required' });
+    try {
+        const { reason } = req.body;
+        if (!reason) return res.status(400).json({ success: false, message: 'Mandatory reason required' });
 
-    const user = await User.findById(req.params.id).select('pan aadhar isKycVerified');
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        const paramId = req.params.id;
+        const query = mongoose.Types.ObjectId.isValid(paramId)
+            ? { $or: [{ id: paramId }, { _id: paramId }] }
+            : { id: paramId };
 
-    // CREATE IMMUTABLE AUDIT LOG
-    const { requestId } = getTraceContext();
-    await AdminAuditLog.create({
-        adminId: req.admin._id,
-        action: 'KYC_VIEWED',
-        reason: reason,
-        status: 'SUCCESS',
-        ipAddress: req.ip,
-        requestId,
-        resourceType: 'User',
-        resourceId: user._id.toString()
-    });
+        const user = await User.findOne(query).select('id pan aadhar isVerified isEmailVerified phone email dob address city');
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    res.status(200).json({
-        success: true,
-        data: {
-            pan: user.pan,
-            aadhar: user.aadhar
-        }
-    });
+        const { requestId } = getTraceContext();
+        await AdminAuditLog.create({
+            adminId: req.admin._id,
+            action: 'KYC_VIEWED',
+            reason: reason,
+            status: 'SUCCESS',
+            ipAddress: req.ip,
+            requestId,
+            resourceType: 'User',
+            resourceId: user.id || user._id.toString()
+        });
+
+        res.status(200).json({
+            success: true,
+            data: {
+                phone: user.phone,
+                email: user.email,
+                dob: user.dob,
+                city: user.city,
+                address: user.address,
+                pan: user.pan || 'Not collected (v1.0 Policy)',
+                aadhar: user.aadhar || 'Not collected (v1.0 Policy)'
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
 };
