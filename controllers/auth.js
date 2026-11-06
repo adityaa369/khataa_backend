@@ -1046,134 +1046,6 @@ exports.syncEmailToFirebase = async (req, res) => {
     }
 };
 
-// @desc    Clear all user data but retain schema
-// @route   POST /api/auth/clear-user-data
-// @access  Public
-exports.clearUserData = async (req, res) => {
-    try {
-        const mongoose = require('mongoose');
-        const fs = require('fs');
-        const path = require('path');
-        const collections = await mongoose.connection.db.listCollections().toArray();
-        const deletedStats = {};
-        
-        for (const col of collections) {
-            const name = col.name;
-            if (name.startsWith('system.')) continue;
-            
-            const collection = mongoose.connection.db.collection(name);
-            const deleteRes = await collection.deleteMany({});
-            deletedStats[name] = deleteRes.deletedCount;
-        }
-
-        // Purge uploads directory
-        try {
-            const uploadsDir = path.join(__dirname, '../uploads');
-            let filesRemoved = 0;
-            if (fs.existsSync(uploadsDir)) {
-                const files = fs.readdirSync(uploadsDir);
-                for (const file of files) {
-                    if (file !== '.gitkeep') {
-                        try {
-                            fs.unlinkSync(path.join(uploadsDir, file));
-                            filesRemoved++;
-                        } catch (_) {}
-                    }
-                }
-            }
-            deletedStats['uploads_files_deleted'] = filesRemoved;
-        } catch (_) {}
-
-        // Purge Firebase Auth users if available
-        try {
-            const admin = require('../config/firebase');
-            let nextPageToken;
-            let fbCount = 0;
-            do {
-                const listUsersResult = await admin.auth().listUsers(100, nextPageToken);
-                for (const userRecord of listUsersResult.users) {
-                    await admin.auth().deleteUser(userRecord.uid);
-                    fbCount++;
-                }
-                nextPageToken = listUsersResult.pageToken;
-            } while (nextPageToken);
-            deletedStats['firebase_auth_users'] = fbCount;
-        } catch (fbErr) {
-            deletedStats['firebase_auth_users'] = 0;
-        }
-        
-        res.status(200).json({ success: true, message: 'User data cleared', stats: deletedStats });
-    } catch (err) {
-        console.error('Error clearing data:', err);
-        res.status(500).json({ success: false, message: err.message });
-    }
-};
-
-// @desc    Force complete a loan by settling outstanding dues and marking completed
-// @route   GET / POST /api/auth/force-complete-loan/:id
-// @access  Public / Dev
-exports.forceCompleteLoan = async (req, res) => {
-    try {
-        const Loan = require('../models/Loan');
-        const { invalidateLoanCache } = require('../middleware/cache');
-        const { cacheInvalidate } = require('../config/redis');
-
-        const { id } = req.params;
-        const loan = await Loan.findById(id);
-        if (!loan) {
-            return res.status(404).json({ success: false, message: 'Loan not found' });
-        }
-
-        const remainingPrincipal = loan.principalOutstandingPaise || 0;
-        const remainingInterest = loan.interestOutstandingPaise || 0;
-        const remainingFees = loan.feesOutstandingPaise || 0;
-        const totalRemaining = remainingPrincipal + remainingInterest + remainingFees;
-
-        if (totalRemaining > 0) {
-            loan.transactions.push({
-                type: 'payment',
-                amountPaise: totalRemaining,
-                principalAllocationPaise: remainingPrincipal,
-                interestAllocationPaise: remainingInterest,
-                feesAllocationPaise: remainingFees,
-                note: 'Principal payment recorded',
-                recordedAt: new Date(),
-                effectiveAt: new Date(),
-                recordedBy: loan.lender,
-                intentId: 'intent_force_complete_' + Date.now()
-            });
-        }
-
-        loan.status = 'completed';
-        loan.progress = 1.0;
-        loan.principalOutstandingPaise = 0;
-        loan.interestOutstandingPaise = 0;
-        loan.feesOutstandingPaise = 0;
-        loan.totalPayablePaise = 0;
-        loan.totalPayable = 0;
-        loan.paidAmountPaise = (loan.paidAmountPaise || 0) + totalRemaining;
-        loan.paidAmount = loan.paidAmountPaise / 100.0;
-        loan.updatedAt = new Date();
-
-        await loan.save();
-        await invalidateLoanCache(loan.lender, loan.borrower);
-        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
-
-        res.status(200).json({
-            success: true,
-            message: 'Loan successfully completed and marked settled.',
-            loanId: loan._id,
-            status: loan.status,
-            progress: loan.progress,
-            paidAmount: loan.paidAmount,
-            totalPayable: loan.totalPayable
-        });
-    } catch (err) {
-        console.error('Error in forceCompleteLoan:', err);
-        res.status(500).json({ success: false, message: err.message });
-    }
-};
-
 // @desc    Update user profile
 // @route   PUT /api/auth/profile
 // @access  Private
@@ -1237,6 +1109,55 @@ exports.changeMpin = async (req, res) => {
     } catch (err) {
         console.error('[Auth] changeMpin error:', err.message);
         res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// @desc    Delete user account and personal data (Google Play Policy & DPDP Act 2023)
+// @route   DELETE /api/auth/account
+// @access  Private
+exports.deleteAccount = async (req, res) => {
+    try {
+        const Loan = require('../models/Loan');
+        const MPinCredential = require('../models/MPinCredential');
+        const SecurityEvent = require('../models/SecurityEvent');
+
+        // Safety check: block deletion if user has active or pending credit obligations
+        const activeCreditsCount = await Loan.countDocuments({
+            $or: [{ lender: req.user.id }, { borrower: req.user.id }],
+            status: { $in: ['active', 'pending', 'pending_otp'] }
+        });
+
+        if (activeCreditsCount > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'You have active or pending credit agreements. Please settle and close all active credits before deleting your account.'
+            });
+        }
+
+        // Remove credentials, score, and security events
+        await MPinCredential.deleteMany({ userId: req.user._id });
+        await CreditScore.deleteMany({ user: req.user.id });
+        await SecurityEvent.deleteMany({ userId: req.user._id });
+
+        // Delete Firebase Auth user if linked
+        if (req.user.firebaseUid && !req.user.firebaseUid.startsWith('mock_uid_')) {
+            try {
+                const admin = require('firebase-admin');
+                await admin.auth().deleteUser(req.user.firebaseUid);
+            } catch (fbErr) {
+                console.warn('[Auth] deleteAccount Firebase user delete warning:', fbErr.message);
+            }
+        }
+
+        await User.deleteOne({ _id: req.user._id });
+
+        res.status(200).json({
+            success: true,
+            message: 'Your HandCredit account and personal data have been permanently deleted.'
+        });
+    } catch (err) {
+        console.error('[Auth] deleteAccount error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to delete account. Please try again.' });
     }
 };
 
