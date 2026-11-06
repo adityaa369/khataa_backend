@@ -46,7 +46,7 @@ const sendEmail = async ({ to, subject, text, html }) => {
         });
 
         const mailOptions = {
-            from: `"Khatha App" <${smtpUser}>`,
+            from: `"HandCredit" <${smtpUser}>`,
             to,
             subject,
             text,

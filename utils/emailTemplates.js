@@ -32,14 +32,14 @@ function baseTemplate(content) {
 <body>
 <div class="wrapper">
   <div class="header">
-    <h1>Khatha</h1>
-    <p>Your Trusted Credit Companion</p>
+    <h1>HandCredit</h1>
+    <p>Mutual Credit &amp; Ledger Record Companion</p>
   </div>
   <div class="body">${content}</div>
   <div class="footer">
-    <p>This is an automated notification from Khatha.<br>
+    <p>This is an automated notification from HandCredit.<br>
     If you did not perform this action, contact support immediately.<br>
-    &copy; ${new Date().getFullYear()} Khatha. All rights reserved.</p>
+    &copy; ${new Date().getFullYear()} HandCredit. All rights reserved.</p>
   </div>
 </div>
 </body>
@@ -50,11 +50,11 @@ function emailVerificationTemplate(name, verifyUrl) {
     const safeName = he.encode(name || 'there');
     return baseTemplate(`
         <p>Hello <strong>${safeName}</strong>,</p>
-        <p>Welcome to Khatha! Please verify your email address to complete your registration and unlock all features.</p>
+        <p>Welcome to HandCredit! Please verify your email address to complete your registration and unlock all features.</p>
         <p style="text-align:center; margin: 24px 0;">
             <a href="${verifyUrl}" class="btn">Verify Email Address</a>
         </p>
-        <p style="color:#6b7280; font-size:13px;">This link expires in <strong>24 hours</strong>. If you did not register on Khatha, you can ignore this email.</p>
+        <p style="color:#6b7280; font-size:13px;">This link expires in <strong>24 hours</strong>. If you did not register on HandCredit, you can ignore this email.</p>
     `);
 }
 
@@ -104,7 +104,7 @@ function loanClosedTemplate({ borrowerName, lenderName, amount, closedDate, loan
           <div class="row"><span class="label">Agreement ID</span><span class="value" style="font-size:11px">${safe(loanId)}</span></div>
           <div class="row"><span class="label">Status</span><span class="value" style="color:#059669">✓ Closed</span></div>
         </div>
-        <p>Thank you for using Khatha. This email is your official proof of agreement closure. Please keep it for your records.</p>
+        <p>Thank you for using HandCredit. This email is your official proof of agreement closure. Please keep it for your records.</p>
     `);
 }
 
