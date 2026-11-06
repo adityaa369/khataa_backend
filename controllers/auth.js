@@ -8,6 +8,57 @@ const crypto = require('crypto');
 const { sendEmail } = require('../utils/email');
 const { emailVerificationTemplate } = require('../utils/emailTemplates');
 
+function validateAdultDob(dobStr) {
+    if (!dobStr || typeof dobStr !== 'string') {
+        return { valid: false, message: 'Date of Birth is required (18+ years only).' };
+    }
+    const trimmed = dobStr.trim();
+    let day, month, year;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
+        const parts = trimmed.split('/');
+        day = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10);
+        year = parseInt(parts[2], 10);
+    } else {
+        const parsed = new Date(trimmed);
+        if (isNaN(parsed.getTime())) {
+            return { valid: false, message: 'Invalid Date of Birth format. Use DD/MM/YYYY.' };
+        }
+        day = parsed.getUTCDate();
+        month = parsed.getUTCMonth() + 1;
+        year = parsed.getUTCFullYear();
+    }
+
+    if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31) {
+        return { valid: false, message: 'Invalid calendar Date of Birth.' };
+    }
+    const birthDate = new Date(Date.UTC(year, month - 1, day));
+    if (
+        birthDate.getUTCFullYear() !== year ||
+        birthDate.getUTCMonth() !== month - 1 ||
+        birthDate.getUTCDate() !== day
+    ) {
+        return { valid: false, message: 'Invalid calendar Date of Birth.' };
+    }
+
+    const now = new Date();
+    let age = now.getUTCFullYear() - year;
+    const mDiff = (now.getUTCMonth() + 1) - month;
+    if (mDiff < 0 || (mDiff === 0 && now.getUTCDate() < day)) {
+        age--;
+    }
+    if (age < 18) {
+        return {
+            valid: false,
+            message: 'Age Restriction (18+ Only): You must be at least 18 years old to use HandCredit under the Indian Contract Act, 1872.'
+        };
+    }
+    if (age > 105) {
+        return { valid: false, message: 'Please enter a valid Date of Birth.' };
+    }
+    return { valid: true, age };
+}
+
 // @desc    Verify Firebase ID Token and login/register
 // @route   POST /api/auth/verify-otp
 // @access  Public
@@ -74,6 +125,15 @@ exports.verifyOtp = async (req, res) => {
         let updates = {};
         updates.firebaseUid = result.uid;
         if (registrationDetails) {
+            if (registrationDetails.dob !== undefined) {
+                const dobCheck = validateAdultDob(registrationDetails.dob);
+                if (!dobCheck.valid) {
+                    return res.status(400).json({
+                        success: false,
+                        message: dobCheck.message
+                    });
+                }
+            }
             const allowedFields = ['firstName', 'lastName', 'email', 'city', 'address', 'pan', 'aadhar', 'dob', 'gender'];
             allowedFields.forEach(field => {
                 if (registrationDetails[field] !== undefined) {
@@ -156,6 +216,19 @@ exports.verifyOtp = async (req, res) => {
 exports.register = async (req, res) => {
     const allowedFields = ['firstName', 'lastName', 'email', 'pan', 'aadhar', 'dob', 'gender', 'city'];
     const updates = {};
+
+    if (req.body.dob !== undefined) {
+        const dobCheck = validateAdultDob(req.body.dob);
+        if (!dobCheck.valid) {
+            return res.status(400).json({ success: false, message: dobCheck.message });
+        }
+        if (req.user && req.user.dob && req.user.dob.trim() !== '' && req.user.dob !== req.body.dob) {
+            return res.status(400).json({
+                success: false,
+                message: 'Date of Birth is permanently locked after registration for compliance.'
+            });
+        }
+    }
 
     allowedFields.forEach(field => {
         if (req.body[field] !== undefined) {
@@ -389,6 +462,15 @@ exports.verifyOtpMsg91 = async (req, res) => {
         let updates = {};
         updates.firebaseUid = 'mock_uid_' + phoneStr;
         if (registrationDetails) {
+            if (registrationDetails.dob !== undefined) {
+                const dobCheck = validateAdultDob(registrationDetails.dob);
+                if (!dobCheck.valid) {
+                    return res.status(400).json({
+                        success: false,
+                        message: dobCheck.message
+                    });
+                }
+            }
             const allowedFields = ['firstName', 'lastName', 'email', 'city', 'address', 'pan', 'aadhar', 'dob', 'gender'];
             allowedFields.forEach(field => {
                 if (registrationDetails[field] !== undefined) {
@@ -634,6 +716,15 @@ exports.verifyOtpMsg91 = async (req, res) => {
         let updates = {};
         updates.firebaseUid = 'mock_uid_' + phoneStr;
         if (registrationDetails) {
+            if (registrationDetails.dob !== undefined) {
+                const dobCheck = validateAdultDob(registrationDetails.dob);
+                if (!dobCheck.valid) {
+                    return res.status(400).json({
+                        success: false,
+                        message: dobCheck.message
+                    });
+                }
+            }
             const allowedFields = ['firstName', 'lastName', 'email', 'city', 'address', 'pan', 'aadhar', 'dob', 'gender'];
             allowedFields.forEach(field => {
                 if (registrationDetails[field] !== undefined) {
