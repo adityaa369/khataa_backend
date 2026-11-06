@@ -182,8 +182,18 @@ class NotificationWorker {
 
     static async processInApp(event) {
         const Notification = require('../models/Notification');
+        const User = require('../models/User');
+        let resolvedUserId = String(event.recipientUserId);
+        try {
+            if (mongoose.Types.ObjectId.isValid(event.recipientUserId)) {
+                const user = await User.findById(event.recipientUserId).select('id').lean();
+                if (user && user.id) {
+                    resolvedUserId = user.id;
+                }
+            }
+        } catch (_) {}
         await Notification.create({
-            userId: event.recipientUserId,
+            userId: resolvedUserId,
             title: event.payload.title,
             body: event.payload.body,
             eventType: event.eventType,

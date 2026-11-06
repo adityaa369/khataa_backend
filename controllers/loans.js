@@ -182,14 +182,19 @@ exports.createLoan = async (req, res) => {
         }
 
 
-        // Verify ownership of uploaded documents in Firebase Storage
-        if (documentIds && documentIds.length > 0) {
-            const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
-            const { getStorage } = require('firebase-admin/storage');
-            const bucket = getStorage().bucket(bucketName);
-            
-            for (const docId of documentIds) {
+        const normalizedDocumentIds = Array.isArray(documentIds)
+            ? documentIds.filter(Boolean).map(String)
+            : (documentId ? String(documentId).split(',').map(s => s.trim()).filter(Boolean) : []);
+        const effectiveDocumentId = documentId || (normalizedDocumentIds.length > 0 ? normalizedDocumentIds.join(',') : undefined);
+
+        // Verify ownership of uploaded documents in Firebase Storage or MongoDB GridFS
+        if (normalizedDocumentIds.length > 0) {
+            const GridFSService = require('../services/GridFSService');
+            for (const docId of normalizedDocumentIds) {
                 if (docId.startsWith('documents/')) {
+                    const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'khaata-42b18.appspot.com';
+                    const { getStorage } = require('firebase-admin/storage');
+                    const bucket = getStorage().bucket(bucketName);
                     const file = bucket.file(docId);
                     const [exists] = await file.exists();
                     if (!exists) {
@@ -199,14 +204,23 @@ exports.createLoan = async (req, res) => {
                     if (!metadata.metadata || metadata.metadata.uploadedBy !== req.user.id) {
                         return res.status(403).json({ success: false, message: `You do not have permission to attach document ${docId}` });
                     }
+                } else {
+                    try {
+                        const meta = await GridFSService.getDocumentMetadata(docId);
+                        if (!meta) {
+                            return res.status(400).json({ success: false, message: `Document ${docId} does not exist` });
+                        }
+                        if (!meta.metadata || meta.metadata.uploadedBy !== req.user.id) {
+                            return res.status(403).json({ success: false, message: `You do not have permission to attach document ${docId}` });
+                        }
+                    } catch (_) {
+                        return res.status(400).json({ success: false, message: `Invalid document reference ${docId}` });
+                    }
                 }
             }
         }
 
-        const normalizedDocumentIds = Array.isArray(documentIds)
-            ? documentIds.filter(Boolean).map(String)
-            : (documentId ? String(documentId).split(',').map(s => s.trim()).filter(Boolean) : []);
-        const effectiveDocumentId = documentId || (normalizedDocumentIds.length > 0 ? normalizedDocumentIds.join(',') : undefined);
+        const effectiveInterestRate = loanType === 'interest_credit' ? Number(interestRate || 0) : 0;
 
         const loan = await Loan.create({
             lender: req.user.id,
@@ -217,7 +231,7 @@ exports.createLoan = async (req, res) => {
             borrowerAddress,
             amount,
             amountPaise: canonicalAmountPaise,
-            interestRate,
+            interestRate: effectiveInterestRate,
             durationMonths,
             durationType,
             loanType,
@@ -815,8 +829,11 @@ exports.closeLoan = async (req, res) => {
 
         const loan = await Loan.findById(req.params.id);
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can close this loan' });
-        if (loan.status === 'closed') return res.status(200).json({ success: true, message: 'Loan is already closed', loan });
+        const userPhone = (req.user.phone || '').toString().replace(/^\+?91/, '');
+        const isLender = loan.lender === req.user.id;
+        const isBorrower = loan.borrower === req.user.id || (userPhone && loan.borrowerPhone === userPhone);
+        if (!isLender && !isBorrower) return res.status(403).json({ success: false, message: 'Not authorized to close this credit' });
+        if (loan.status === 'closed') return res.status(200).json({ success: true, message: 'Credit is already closed', loan });
 
         if (!intentId) return res.status(400).json({ success: false, message: 'intentId is required' });
 
@@ -836,17 +853,9 @@ exports.closeLoan = async (req, res) => {
         );
 
         if (intent.status === 'COMMITTED') {
-            return res.status(200).json({ success: true, message: 'Loan successfully closed (idempotent).', loan });
+            return res.status(200).json({ success: true, message: 'Credit successfully closed (idempotent).', loan });
         } else if (intent.status === 'REJECTED') {
             return res.status(400).json({ success: false, message: 'Transaction intent was previously rejected' });
-        }
-
-        try {
-            await FinancialLedgerService.closeLoan(loan, new Date());
-        } catch (e) {
-            intent.status = 'REJECTED';
-            await intent.save();
-            return res.status(400).json({ success: false, message: e.message });
         }
 
         const EventDispatcher = require('../utils/EventDispatcher');
@@ -856,37 +865,40 @@ exports.closeLoan = async (req, res) => {
         // === ATOMIC BOUNDARY: close + outbox ===
         await withTransaction(async (session) => {
             const sessionLoan = await Loan.findById(loan._id).session(session);
-            sessionLoan.status = 'closed';
-            sessionLoan.progress = 1.0;
+            await FinancialLedgerService.closeLoan(sessionLoan, new Date(), req.user.id, intentId);
             await sessionLoan.save({ session });
 
             const sessionIntent = await TransactionIntent.findById(intent._id).session(session);
             sessionIntent.status = 'COMMITTED';
             await sessionIntent.save({ session });
 
-            // Dispatch to both lender and borrower (if exists)
-            const dispatchPromises = [
-                EventDispatcher.dispatch({
-                    eventType: NotificationEvents.LOAN_CLOSED,
-                    aggregateType: 'LOAN',
-                    aggregateId: sessionLoan._id.toString(),
-                    recipientUserId: req.user._id,
-                    payload: { title: 'Loan Closed', body: `Your loan of ₹${loan.amount} has been closed.`, type: 'LOAN_CLOSED', loanId: sessionLoan._id.toString() },
-                    idempotencyKey: `${intentId}_LENDER`,
-                    session
-                })
-            ];
+            const LenderUser = require('../models/User');
+            const lenderUser = await LenderUser.findOne({ id: sessionLoan.lender }).session(session);
+            const dispatchPromises = [];
+            if (lenderUser && lenderUser._id) {
+                dispatchPromises.push(
+                    EventDispatcher.dispatch({
+                        eventType: NotificationEvents.LOAN_CLOSED,
+                        aggregateType: 'LOAN',
+                        aggregateId: sessionLoan._id.toString(),
+                        recipientUserId: lenderUser._id,
+                        payload: { title: 'Credit Closed', body: `Your credit record of ₹${loan.amount} has been closed and settled.`, type: 'LOAN_CLOSED', loanId: sessionLoan._id.toString() },
+                        idempotencyKey: `${intentId}_LENDER`,
+                        session
+                    })
+                );
+            }
 
             if (sessionLoan.borrower) {
                 const BorrowerUser = require('../models/User');
                 const borrowerUser = await BorrowerUser.findOne({ id: sessionLoan.borrower }).session(session);
-                if (borrowerUser) {
+                if (borrowerUser && borrowerUser._id) {
                     dispatchPromises.push(EventDispatcher.dispatch({
                         eventType: NotificationEvents.LOAN_CLOSED,
                         aggregateType: 'LOAN',
                         aggregateId: sessionLoan._id.toString(),
                         recipientUserId: borrowerUser._id,
-                        payload: { title: 'Loan Closed', body: `Your loan of ₹${loan.amount} has been closed.`, type: 'LOAN_CLOSED', loanId: sessionLoan._id.toString() },
+                        payload: { title: 'Credit Closed', body: `Your credit record of ₹${loan.amount} has been closed and settled.`, type: 'LOAN_CLOSED', loanId: sessionLoan._id.toString() },
                         idempotencyKey: `${intentId}_BORROWER`,
                         session
                     }));
@@ -983,8 +995,11 @@ async function _handleCustomTransaction(req, res, actionType) {
 
         const loan = await Loan.findById(req.params.id);
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        if (loan.lender !== req.user.id) return res.status(403).json({ success: false, message: 'Only lender can update this loan' });
-        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Loan is already closed' });
+        const userPhone = (req.user.phone || '').toString().replace(/^\+?91/, '');
+        const isLender = loan.lender === req.user.id;
+        const isBorrower = loan.borrower === req.user.id || (userPhone && loan.borrowerPhone === userPhone);
+        if (!isLender && !isBorrower) return res.status(403).json({ success: false, message: 'Not authorized to update this credit' });
+        if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Credit is already closed' });
         if (!pa || pa <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
         
         if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required' });
@@ -997,53 +1012,84 @@ async function _handleCustomTransaction(req, res, actionType) {
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         const EventDispatcher = require('../utils/EventDispatcher');
         const NotificationEvents = require('../utils/NotificationEvents');
+        const TransactionIntent = require('../models/TransactionIntent');
         const { withTransaction } = require('../utils/dbTransaction');
 
         let savedLoan;
         let notifTitle = 'Transaction Complete', notifBody = '';
 
-        // === ATOMIC BOUNDARY: loan mutation + outbox insert in one session ===
+        // === ATOMIC BOUNDARY: loan mutation + intent commit + outbox insert in one session ===
         await withTransaction(async (session) => {
             // Re-fetch inside the session for clean session-bound document
             const sessionLoan = await Loan.findById(loan._id).session(session);
 
+            if (intentId) {
+                const sessionIntent = await TransactionIntent.findOne({ intentId }).session(session);
+                if (sessionIntent) {
+                    if (sessionIntent.status === 'COMMITTED') {
+                        savedLoan = sessionLoan;
+                        return;
+                    }
+                    sessionIntent.status = 'COMMITTED';
+                    await sessionIntent.save({ session });
+                }
+            }
+
             if (actionType === 'recordPayment' || actionType === 'recordInterest') {
                 const pType = actionType === 'recordInterest' ? 'interest' : 'principal';
                 await FinancialLedgerService.recordPayment(sessionLoan, pa, intentId, req.user.id, new Date(), pType);
-                notifTitle = 'Payment Recorded';
-                notifBody = `Your lender recorded a payment of Rs.${pa / 100}. Remaining: Rs.${sessionLoan.totalPayablePaise / 100}.`;
+                notifTitle = 'Repayment Recorded';
+                notifBody = `A repayment of ₹${pa / 100} was recorded. Remaining balance: ₹${sessionLoan.totalPayablePaise / 100}.`;
             } else if (actionType === 'addCredit') {
                 await FinancialLedgerService.addCredit(sessionLoan, pa, intentId, req.user.id);
-                notifTitle = 'Credit Added';
-                notifBody = `Your lender added Rs.${pa / 100}. Total payable: Rs.${sessionLoan.totalPayablePaise / 100}.`;
+                notifTitle = 'Additional Credit Added';
+                notifBody = `₹${pa / 100} was added to your credit record. Updated payable balance: ₹${sessionLoan.totalPayablePaise / 100}.`;
             }
 
             await sessionLoan.save({ session });
             savedLoan = sessionLoan;
 
-            // Dispatch outbox inside the same session — atomically
-            if (sessionLoan.borrower) {
-                const BorrowerUser = require('../models/User');
-                const borrowerUser = await BorrowerUser.findOne({ id: sessionLoan.borrower }).session(session);
-                if (borrowerUser) {
-                    let eventType = NotificationEvents.PAYMENT_RECEIVED;
-                    if (actionType === 'addCredit') eventType = NotificationEvents.LOAN_RECEIVED;
+            const User = require('../models/User');
+            const [lenderUser, borrowerUser] = await Promise.all([
+                User.findOne({ id: sessionLoan.lender }).session(session),
+                sessionLoan.borrower ? User.findOne({ id: sessionLoan.borrower }).session(session) : null
+            ]);
 
-                    await EventDispatcher.dispatch({
-                        eventType,
-                        aggregateType: 'LOAN',
-                        aggregateId: sessionLoan._id.toString(),
-                        recipientUserId: borrowerUser._id,
-                        payload: {
-                            title: notifTitle,
-                            body: notifBody,
-                            type: 'LOAN_TRANSACTION',
-                            loanId: sessionLoan._id.toString()
-                        },
-                        idempotencyKey: intentId,
-                        session
-                    });
-                }
+            let eventType = NotificationEvents.PAYMENT_RECEIVED;
+            if (actionType === 'addCredit') eventType = NotificationEvents.LOAN_RECEIVED;
+
+            if (borrowerUser && borrowerUser._id) {
+                await EventDispatcher.dispatch({
+                    eventType,
+                    aggregateType: 'LOAN',
+                    aggregateId: sessionLoan._id.toString(),
+                    recipientUserId: borrowerUser._id,
+                    payload: {
+                        title: notifTitle,
+                        body: notifBody,
+                        type: 'LOAN_TRANSACTION',
+                        loanId: sessionLoan._id.toString()
+                    },
+                    idempotencyKey: intentId ? `${intentId}_BORROWER` : undefined,
+                    session
+                });
+            }
+
+            if (lenderUser && lenderUser._id) {
+                await EventDispatcher.dispatch({
+                    eventType,
+                    aggregateType: 'LOAN',
+                    aggregateId: sessionLoan._id.toString(),
+                    recipientUserId: lenderUser._id,
+                    payload: {
+                        title: notifTitle,
+                        body: notifBody,
+                        type: 'LOAN_TRANSACTION',
+                        loanId: sessionLoan._id.toString()
+                    },
+                    idempotencyKey: intentId ? `${intentId}_LENDER` : undefined,
+                    session
+                });
             }
         }); // === END ATOMIC BOUNDARY ===
 
@@ -1271,7 +1317,20 @@ exports.deleteDocument = async (req, res) => {
                 return res.status(404).json({ success: false, message: 'Document not found' });
             }
         } else {
-            return res.status(400).json({ success: false, message: 'Invalid documentId format' });
+            const GridFSService = require('../services/GridFSService');
+            const meta = await GridFSService.getDocumentMetadata(documentId);
+            if (!meta) return res.status(404).json({ success: false, message: 'Document not found' });
+            if (!meta.metadata || meta.metadata.uploadedBy !== req.user.id) {
+                return res.status(403).json({ success: false, message: 'Unauthorized' });
+            }
+            const attachedLoan = await Loan.findOne({
+                $or: [{ documentId }, { documentIds: documentId }]
+            });
+            if (attachedLoan) {
+                return res.status(400).json({ success: false, message: 'Cannot delete a document already attached to an active credit record' });
+            }
+            await GridFSService.deleteDocument(documentId);
+            return res.status(200).json({ success: true, message: 'Document deleted' });
         }
     } catch (err) {
         console.error('[Cleanup] Error deleting document:', err.message);
@@ -1289,13 +1348,14 @@ exports.downloadNoc = async (req, res) => {
 
         const loan = await Loan.findById(req.params.id);
         if (!loan) {
-            return res.status(404).json({ success: false, message: 'Loan not found' });
+            return res.status(404).json({ success: false, message: 'Credit record not found' });
         }
 
+        const userPhone = (req.user.phone || '').toString().replace(/^\+?91/, '');
         const isLender = loan.lender && (loan.lender.toString() === req.user.id);
-        const isBorrower = loan.borrower && (loan.borrower.toString() === req.user.id);
+        const isBorrower = (loan.borrower && (loan.borrower.toString() === req.user.id)) || (userPhone && loan.borrowerPhone === userPhone);
         if (!isLender && !isBorrower) {
-            return res.status(403).json({ success: false, message: 'Not authorized to download this NOC' });
+            return res.status(403).json({ success: false, message: 'Not authorized to download this settlement summary' });
         }
 
         FinancialLedgerService.deriveBalances(loan);
@@ -1331,18 +1391,24 @@ exports.downloadNoc = async (req, res) => {
 
         const totalSettledValue = totalPaidRupees > 0 ? totalPaidRupees : (principalRupees + totalInterestRupees);
 
-        // Fetch User profiles
+        // Fetch User profiles and mask phone numbers for privacy (no Aadhaar/PAN exposed)
+        const maskPhone = (rawPhone) => {
+            if (!rawPhone) return 'N/A';
+            const clean = String(rawPhone).replace(/\D/g, '');
+            if (clean.length >= 4) {
+                return `+91 XXXXXX${clean.slice(-4)}`;
+            }
+            return 'N/A';
+        };
+
         const lenderUser = await User.findOne({ id: loan.lender });
         const borrowerUser = loan.borrower ? await User.findOne({ id: loan.borrower }) : null;
 
-        const lenderName = lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'Lender';
-        const lenderPhone = lenderUser?.phone ? `+91 ${lenderUser.phone}` : 'N/A';
-        const borrowerName = loan.borrowerName || (borrowerUser ? `${borrowerUser.firstName || ''} ${borrowerUser.lastName || ''}`.trim() : 'Borrower');
-        const borrowerPhone = loan.borrowerPhone ? `+91 ${loan.borrowerPhone}` : (borrowerUser?.phone ? `+91 ${borrowerUser.phone}` : 'N/A');
-        
-        const rawAadhaar = loan.borrowerAadhar || (borrowerUser ? borrowerUser.aadhar : null);
-        const hasAadhaar = rawAadhaar && rawAadhaar !== 'N/A' && rawAadhaar.trim().length > 0;
-        const borrowerAadhaar = hasAadhaar ? rawAadhaar.trim() : null;
+        const lenderName = lenderUser ? `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() : 'Creditor';
+        const lenderPhone = maskPhone(lenderUser?.phone);
+        const borrowerName = loan.borrowerName || (borrowerUser ? `${borrowerUser.firstName || ''} ${borrowerUser.lastName || ''}`.trim() : 'Counterparty');
+        const borrowerPhone = maskPhone(loan.borrowerPhone || borrowerUser?.phone);
+        const shortRef = loan._id.toString().slice(-8).toUpperCase();
 
         const loanTypeStr = (loan.loanType || loan.type || 'Personal').toLowerCase();
         let displayType = 'Personal Credit';
@@ -1365,17 +1431,17 @@ exports.downloadNoc = async (req, res) => {
         const doc = new PDFDocument({ margin: 40, size: 'A4' });
 
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'inline; filename="NOC_' + loan._id + '.pdf"');
+        res.setHeader('Content-Disposition', `inline; filename="HandCredit_Settlement_${shortRef}.pdf"`);
 
         doc.pipe(res);
 
         // --- Outer Border ---
-        doc.rect(20, 20, 555, 802).lineWidth(1.5).stroke('#1E3A8A');
-        doc.rect(23, 23, 549, 796).lineWidth(0.5).stroke('#93C5FD');
+        doc.rect(20, 20, 555, 802).lineWidth(1.5).stroke('#059669');
+        doc.rect(23, 23, 549, 796).lineWidth(0.5).stroke('#6EE7B7');
 
         // --- Header ---
-        doc.fontSize(20).font('Helvetica-Bold').fillColor('#1E3A8A').text('NO DUES CERTIFICATE (NOC)', 40, 45, { align: 'center' });
-        doc.fontSize(10).font('Helvetica').fillColor('#64748B').text('DEBT SETTLEMENT & CLEARANCE CERTIFICATION', { align: 'center' });
+        doc.fontSize(19).font('Helvetica-Bold').fillColor('#065F46').text('MUTUAL CREDIT SETTLEMENT SUMMARY', 40, 45, { align: 'center' });
+        doc.fontSize(9.5).font('Helvetica').fillColor('#64748B').text('HANDCREDIT DIGITAL LEDGER CLOSURE RECEIPT', { align: 'center' });
         doc.moveDown(0.5);
 
         // Line divider
@@ -1384,15 +1450,15 @@ exports.downloadNoc = async (req, res) => {
 
         // Meta Info
         const metaY = doc.y;
-        doc.fontSize(9).font('Helvetica-Bold').fillColor('#334155').text('Certificate Ref: ', 40, metaY, { continued: true })
-            .font('Helvetica').text(`NOC-${loan._id.toString().toUpperCase()}`);
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#334155').text('Ledger Ref: ', 40, metaY, { continued: true })
+            .font('Helvetica').text(`HC-${shortRef}`);
         doc.fontSize(9).font('Helvetica-Bold').text('Date of Issue: ', 380, metaY, { continued: true })
             .font('Helvetica').text(issueDateStr);
         doc.moveDown(1.2);
 
         // Declaration
-        doc.fontSize(10).font('Helvetica').fillColor('#1E293B').text(
-            `This is an authoritative certification that the credit agreement detailed below, executed between the Lender and the Borrower, has been FULLY AND FINALLY REPAID. All principal, interest, and applicable fees have been completely settled with ZERO outstanding liability.`,
+        doc.fontSize(9.5).font('Helvetica').fillColor('#1E293B').text(
+            `This document summarizes that the mutual credit ledger entry detailed below, recorded between the Creditor and Counterparty on the HandCredit digital bookkeeping utility, has been marked as FULLY SETTLED with ZERO outstanding balance remaining.`,
             40,
             doc.y,
             { align: 'justify', lineGap: 3 }
@@ -1404,16 +1470,13 @@ exports.downloadNoc = async (req, res) => {
         doc.rect(40, box1Y, 515, 60).fillAndStroke('#F8FAFC', '#E2E8F0');
         doc.fillColor('#0F172A');
 
-        doc.fontSize(9).font('Helvetica-Bold').text('LENDER DETAILS', 50, box1Y + 8);
+        doc.fontSize(9).font('Helvetica-Bold').text('CREDITOR (GIVER) DETAILS', 50, box1Y + 8);
         doc.font('Helvetica').fontSize(9).text(`Name: ${lenderName}`, 50, box1Y + 22);
-        doc.text(`Phone: ${lenderPhone}`, 50, box1Y + 36);
+        doc.text(`Mobile: ${lenderPhone}`, 50, box1Y + 36);
 
-        doc.fontSize(9).font('Helvetica-Bold').text('BORROWER DETAILS', 300, box1Y + 8);
+        doc.fontSize(9).font('Helvetica-Bold').text('COUNTERPARTY (RECEIVER) DETAILS', 300, box1Y + 8);
         doc.font('Helvetica').fontSize(9).text(`Name: ${borrowerName}`, 300, box1Y + 22);
-        const borrowerIdText = borrowerAadhaar
-            ? `Phone: ${borrowerPhone}  |  Aadhaar: ${borrowerAadhaar}`
-            : `Phone: ${borrowerPhone}  |  Status: Verified Borrower`;
-        doc.text(borrowerIdText, 300, box1Y + 36);
+        doc.text(`Mobile: ${borrowerPhone}  |  Status: Verified Account`, 300, box1Y + 36);
 
         doc.y = box1Y + 70;
         doc.moveDown(0.5);
@@ -1421,7 +1484,7 @@ exports.downloadNoc = async (req, res) => {
         // --- Credit Summary Box ---
         const box2Y = doc.y;
         doc.rect(40, box2Y, 515, 110).fillAndStroke('#F0FDF4', '#86EFAC');
-        doc.fontSize(10).font('Helvetica-Bold').fillColor('#166534').text('OFFICIAL CREDIT & SETTLEMENT BREAKDOWN', 50, box2Y + 10, { align: 'center' });
+        doc.fontSize(10).font('Helvetica-Bold').fillColor('#166534').text('MUTUAL LEDGER & SETTLEMENT BREAKDOWN', 50, box2Y + 10, { align: 'center' });
         doc.moveDown(0.5);
 
         const leftColX = 55;
@@ -1429,19 +1492,19 @@ exports.downloadNoc = async (req, res) => {
         let lineY = box2Y + 30;
 
         doc.fontSize(9).font('Helvetica-Bold').fillColor('#14532D');
-        doc.text('Credit Type:', leftColX, lineY);
+        doc.text('Credit Category:', leftColX, lineY);
         doc.font('Helvetica').text(displayType, leftColX + 110, lineY);
-        doc.font('Helvetica-Bold').text('Principal Disbursed:', rightColX, lineY);
+        doc.font('Helvetica-Bold').text('Principal Recorded:', rightColX, lineY);
         doc.font('Helvetica').text(`Rs. ${principalRupees.toLocaleString('en-IN')}`, rightColX + 115, lineY);
 
         lineY += 16;
         doc.font('Helvetica-Bold').text('Duration:', leftColX, lineY);
         doc.font('Helvetica').text(`${loan.durationMonths || 0} ${loan.durationType || 'Months'}`, leftColX + 110, lineY);
-        doc.font('Helvetica-Bold').text('Interest Incurred:', rightColX, lineY);
+        doc.font('Helvetica-Bold').text('Interest Recorded:', rightColX, lineY);
         doc.font('Helvetica').text(`Rs. ${totalInterestRupees.toLocaleString('en-IN')}`, rightColX + 115, lineY);
 
         lineY += 16;
-        doc.font('Helvetica-Bold').text('Disbursed Date:', leftColX, lineY);
+        doc.font('Helvetica-Bold').text('Start Date:', leftColX, lineY);
         doc.font('Helvetica').text(startDateStr, leftColX + 110, lineY);
         doc.font('Helvetica-Bold').text('Total Settled Amount:', rightColX, lineY);
         doc.font('Helvetica').text(`Rs. ${totalSettledValue.toLocaleString('en-IN')}`, rightColX + 115, lineY);
@@ -1449,14 +1512,14 @@ exports.downloadNoc = async (req, res) => {
         lineY += 16;
         doc.font('Helvetica-Bold').text('Settlement Date:', leftColX, lineY);
         doc.font('Helvetica').text(closeDateStr, leftColX + 110, lineY);
-        doc.font('Helvetica-Bold').fillColor('#15803D').text('Outstanding Balance:', rightColX, lineY);
+        doc.font('Helvetica-Bold').fillColor('#15803D').text('Remaining Balance:', rightColX, lineY);
         doc.font('Helvetica-Bold').fillColor('#15803D').text('Rs. 0.00 (NIL / SETTLED)', rightColX + 115, lineY);
 
         doc.y = box2Y + 120;
         doc.moveDown(0.5);
 
         // --- Transaction Proof Table ---
-        doc.fontSize(10).font('Helvetica-Bold').fillColor('#1E3A8A').text('PAYMENT SETTLEMENT PROOF (AUDIT TRAIL)', 40, doc.y);
+        doc.fontSize(10).font('Helvetica-Bold').fillColor('#065F46').text('RECORDED REPAYMENT LEDGER (AUDIT TRAIL)', 40, doc.y);
         doc.moveDown(0.4);
 
         const tableTop = doc.y;
@@ -1464,25 +1527,26 @@ exports.downloadNoc = async (req, res) => {
         doc.fillColor('#0F172A').font('Helvetica-Bold').fontSize(8.5);
         doc.text('#', 48, tableTop + 5);
         doc.text('Date', 70, tableTop + 5);
-        doc.text('Transaction Type / Note', 160, tableTop + 5);
+        doc.text('Ledger Entry / Note', 160, tableTop + 5);
         doc.text('Amount (INR)', 410, tableTop + 5);
         doc.text('Status', 485, tableTop + 5);
 
         const paymentTxns = allTransactions.filter(t => t.type === 'payment' || t.type === 'interest_payment');
         let currentY = tableTop + 20;
+        const maxRows = 7;
 
         if (paymentTxns.length === 0) {
             doc.rect(40, currentY, 515, 20).fillAndStroke('#FFFFFF', '#E2E8F0');
-            doc.font('Helvetica').fontSize(8.5).fillColor('#64748B').text('Full settlement recorded via authorized closure.', 50, currentY + 5);
+            doc.font('Helvetica').fontSize(8.5).fillColor('#64748B').text('Full settlement recorded via mutual closure confirmation.', 50, currentY + 5);
             currentY += 20;
         } else {
-            paymentTxns.slice(0, 10).forEach((txn, index) => {
+            paymentTxns.slice(0, maxRows).forEach((txn, index) => {
                 const isEven = index % 2 === 0;
                 doc.rect(40, currentY, 515, 18).fillAndStroke(isEven ? '#FFFFFF' : '#F8FAFC', '#E2E8F0');
 
                 const tDate = new Date(txn.effectiveAt || txn.recordedAt || Date.now()).toLocaleDateString('en-IN');
                 const tAmt = ((txn.amountPaise || (txn.amount ? txn.amount * 100 : 0)) / 100).toLocaleString('en-IN');
-                let tDesc = txn.note || 'Payment Recorded';
+                let tDesc = txn.note || 'Repayment Recorded';
                 if (txn.principalAllocationPaise > 0 && txn.interestAllocationPaise > 0) {
                     tDesc = `Principal: Rs.${txn.principalAllocationPaise/100} + Interest: Rs.${txn.interestAllocationPaise/100}`;
                 } else if (txn.principalAllocationPaise > 0) {
@@ -1496,41 +1560,51 @@ exports.downloadNoc = async (req, res) => {
                 doc.text(tDate, 70, currentY + 4);
                 doc.text(tDesc, 160, currentY + 4, { width: 240, ellipsis: true });
                 doc.font('Helvetica-Bold').text(`Rs. ${tAmt}`, 410, currentY + 4);
-                doc.fillColor('#166534').text('CONFIRMED', 485, currentY + 4);
+                doc.fillColor('#166534').text('RECORDED', 485, currentY + 4);
 
                 currentY += 18;
             });
+            if (paymentTxns.length > maxRows) {
+                const extraCount = paymentTxns.length - maxRows;
+                doc.rect(40, currentY, 515, 18).fillAndStroke('#F8FAFC', '#E2E8F0');
+                doc.fillColor('#475569').font('Helvetica-Oblique').fontSize(8).text(
+                    `+ ${extraCount} additional confirmed repayment entry(s) recorded in digital ledger.`,
+                    50,
+                    currentY + 4
+                );
+                currentY += 18;
+            }
         }
 
-        doc.y = currentY + 15;
+        doc.y = currentY + 14;
 
-        // --- Legal Discharge Statement ---
-        doc.fontSize(8.5).font('Helvetica-Oblique').fillColor('#475569').text(
-            'Declaration: The Lender confirms that no further claims, pledges, collateral demands, or interest payments remain active against this account. This electronically verified No Objection Certificate (NOC) serves as irrefutable legal clearance under the Khaata Digital Ledger system.',
+        // --- Non-Lender Bookkeeping Disclaimer ---
+        doc.fontSize(8).font('Helvetica-Oblique').fillColor('#475569').text(
+            'Disclaimer: This summary reflects ledger entries mutually recorded and acknowledged by the Creditor and Counterparty on the HandCredit digital bookkeeping utility. HandCredit is strictly a peer-to-peer record-keeping application, is NOT a bank, NBFC, or regulated lender, and does not disburse funds or independently verify offline transfers.',
             40,
             doc.y,
             { align: 'justify', lineGap: 2 }
         );
-        doc.moveDown(1.5);
+        doc.moveDown(1.2);
 
         // --- Signature Section ---
         const sigY = doc.y;
         doc.rect(40, sigY, 230, 45).fillAndStroke('#F8FAFC', '#E2E8F0');
         doc.rect(325, sigY, 230, 45).fillAndStroke('#F8FAFC', '#E2E8F0');
 
-        doc.fontSize(8).font('Helvetica-Bold').fillColor('#0F172A').text('LENDER AUTHORIZATION', 50, sigY + 6);
-        doc.font('Helvetica').fontSize(7.5).fillColor('#64748B').text(`Digitally Certified by: ${lenderName}`, 50, sigY + 18);
-        doc.text(`Status: DUES CLEARED & SATISFIED`, 50, sigY + 30);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#0F172A').text('CREDITOR ACKNOWLEDGEMENT', 50, sigY + 6);
+        doc.font('Helvetica').fontSize(7.5).fillColor('#64748B').text(`Recorded by: ${lenderName}`, 50, sigY + 18);
+        doc.text(`Status: LEDGER BALANCE NIL`, 50, sigY + 30);
 
-        doc.fontSize(8).font('Helvetica-Bold').fillColor('#0F172A').text('PLATFORM VERIFICATION SEAL', 335, sigY + 6);
-        doc.font('Helvetica').fontSize(7.5).fillColor('#64748B').text('Khaata Financial Protocol V2', 335, sigY + 18);
-        doc.fillColor('#15803D').text('VERIFIED: ZERO OUTSTANDING DUES', 335, sigY + 30);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#0F172A').text('DIGITAL LEDGER TIMESTAMP', 335, sigY + 6);
+        doc.font('Helvetica').fontSize(7.5).fillColor('#64748B').text('HandCredit Digital Ledger Record', 335, sigY + 18);
+        doc.fillColor('#15803D').text('STATUS: SETTLED & CLOSED', 335, sigY + 30);
 
         doc.end();
     } catch (err) {
         console.error('[DownloadNOC] Error:', err);
         if (!res.headersSent) {
-            res.status(500).json({ success: false, message: 'Failed to generate NOC: ' + err.message });
+            res.status(500).json({ success: false, message: 'Failed to generate settlement certificate: ' + err.message });
         }
     }
 };

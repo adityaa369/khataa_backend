@@ -83,7 +83,7 @@ exports.getUserDetail = async (req, res) => {
         const [loans, chits, creditScore] = await Promise.all([
             Loan.find({ $or: [{ lender: req.params.id }, { borrower: req.params.id }] }).limit(10),
             ChitFund.find({ $or: [{ owner: req.params.id }, { 'members.user': req.params.id }] }).limit(10),
-            CreditScore.findOne({ userId: req.params.id })
+            CreditScore.findOne({ user: req.params.id })
         ]);
 
         res.json({ success: true, user, loans, chits, creditScore });

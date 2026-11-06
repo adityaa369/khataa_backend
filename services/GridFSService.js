@@ -44,6 +44,11 @@ class GridFSService {
         const bucket = this.getBucket();
         return bucket.openDownloadStream(new ObjectId(id));
     }
+
+    static async deleteDocument(id) {
+        const bucket = this.getBucket();
+        await bucket.delete(new ObjectId(id));
+    }
 }
 
 module.exports = GridFSService;

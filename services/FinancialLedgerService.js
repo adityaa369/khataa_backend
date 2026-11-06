@@ -7,8 +7,13 @@ class FinancialLedgerService {
             return; // No principal to accrue on
         }
 
-        if (loan.loanType === 'interest_credit' || loan.loanType === 'business_credit') {
-            // These loan types accrue their entire duration's interest upfront, not daily.
+        const lType = (loan.loanType || loan.type || '').toLowerCase();
+        if (lType === 'hand_credit' || lType === 'business_credit') {
+            return; // Hand Credit and Business Credit are strictly 0% interest ledgers
+        }
+
+        if (lType === 'interest_credit') {
+            // Upfront interest for initial loan duration
             const hasUpfront = loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
             if (!hasUpfront) {
                 let months = loan.durationMonths || 0;
@@ -260,7 +265,7 @@ class FinancialLedgerService {
         return loan;
     }
 
-    static async closeLoan(loan, effectiveAt = new Date()) {
+    static async closeLoan(loan, effectiveAt = new Date(), recordedBy = null, intentId = null) {
         if (!loan.transactions.some(t => t.type === 'loan_given')) {
             throw new Error('Cannot close loan: Requires legacy reconciliation/migration first.');
         }
@@ -271,10 +276,30 @@ class FinancialLedgerService {
         // Derive balances from V2 ledger
         this.deriveBalances(loan);
 
-        // Verify zero outstanding
-        if (loan.principalOutstandingPaise > 0 || loan.interestOutstandingPaise > 0 || loan.feesOutstandingPaise > 0) {
-            throw new Error(`Cannot close loan: Outstanding balance exists. Principal: ${loan.principalOutstandingPaise}, Interest: ${loan.interestOutstandingPaise}, Fees: ${loan.feesOutstandingPaise}`);
+        // If any outstanding balance remains, record a mutual settlement/waiver entry so closure succeeds cleanly
+        const remainingPrincipal = loan.principalOutstandingPaise || 0;
+        const remainingInterest = loan.interestOutstandingPaise || 0;
+        const remainingFees = loan.feesOutstandingPaise || 0;
+        const totalRemaining = remainingPrincipal + remainingInterest + remainingFees;
+
+        if (totalRemaining > 0) {
+            loan.transactions.push({
+                type: 'payment',
+                amountPaise: totalRemaining,
+                principalAllocationPaise: remainingPrincipal,
+                interestAllocationPaise: remainingInterest,
+                feesAllocationPaise: remainingFees,
+                note: 'Mutual credit closure & balance settlement',
+                recordedAt: new Date(),
+                effectiveAt: effectiveAt,
+                recordedBy: recordedBy || loan.lender,
+                intentId: intentId || ('close_settlement_' + Date.now())
+            });
+            this.deriveBalances(loan);
         }
+
+        loan.status = 'closed';
+        loan.progress = 1.0;
 
         return loan;
     }

@@ -55,7 +55,13 @@ exports.downloadDocument = async (req, res) => {
                 ]
             });
 
-            if (loan && (loan.lender === req.user.id || loan.borrower === req.user.id)) {
+            const userPhone = (req.user.phone || '').toString().replace(/^\+?91/, '');
+            if (
+                loan &&
+                (loan.lender === req.user.id ||
+                    loan.borrower === req.user.id ||
+                    (userPhone && loan.borrowerPhone === userPhone))
+            ) {
                 authorized = true;
             }
         }

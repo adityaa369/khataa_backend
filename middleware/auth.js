@@ -32,6 +32,13 @@ const protect = async (req, res, next) => {
             });
         }
 
+        if (req.user.isSuspended) {
+            return res.status(403).json({
+                success: false,
+                message: 'Your account has been suspended. Please contact support.'
+            });
+        }
+
         next();
     } catch (err) {
         if (err.name === 'TokenExpiredError') {

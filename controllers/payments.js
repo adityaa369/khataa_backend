@@ -239,23 +239,24 @@ exports.commitPayment = async (req, res) => {
         const session = await mongoose.startSession();
         session.startTransaction();
         let result;
+        let sessionLoan;
         try {
             // Consume challenge
             await OtpChallenge.updateOne({ _id: challenge._id }, { status: 'CONSUMED' }, { session });
 
+            // Re-fetch loan within session for snapshot isolation
+            sessionLoan = await Loan.findById(loanId).session(session);
+
             // Execute payment via FROZEN FinancialLedgerService
-            result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id, new Date(), paymentType);
+            result = await FinancialLedgerService.recordPayment(sessionLoan, amountPaise, intentId, req.user.id, new Date(), paymentType);
             
-            // Fix: Actually save the loan inside the transaction!
-            await loan.save({ session });
+            // Save the loan inside the transaction!
+            await sessionLoan.save({ session });
 
             // Mark intent as committed
             await TransactionIntent.updateOne({ intentId }, { status: 'COMMITTED' }, { session });
 
             await session.commitTransaction();
-
-            
-            
         } catch (err) {
             await session.abortTransaction();
             console.error('[CommitPayment] Transaction aborted:', err);
@@ -273,18 +274,41 @@ exports.commitPayment = async (req, res) => {
 
         // 8. Dispatch notifications (outside transaction)
         try {
-            await EventDispatcher.dispatch({
-                eventType: 'PAYMENT_RECEIVED',
-                recipientUserId: intent.userId, // lender
-                data: { amountPaise, borrowerId: req.user.id },
-                loanId
-            });
-            await EventDispatcher.dispatch({
-                eventType: 'PAYMENT_MADE',
-                recipientUserId: req.user.id, // borrower
-                data: { amountPaise },
-                loanId
-            });
+            const [lenderUser, borrowerUser] = await Promise.all([
+                User.findOne({ id: loan.lender }).select('_id id firstName lastName').lean(),
+                loan.borrower ? User.findOne({ id: loan.borrower }).select('_id id firstName lastName').lean() : null
+            ]);
+            const amountRupees = (amountPaise / 100).toFixed(2);
+            if (lenderUser && lenderUser._id) {
+                await EventDispatcher.dispatch({
+                    eventType: 'PAYMENT_RECEIVED',
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    recipientUserId: lenderUser._id,
+                    payload: {
+                        title: 'Repayment Recorded',
+                        body: `A repayment of ₹${amountRupees} has been confirmed on your credit record.`,
+                        type: 'PAYMENT_RECEIVED',
+                        loanId: loan._id.toString()
+                    },
+                    idempotencyKey: `${intentId}_LENDER`
+                });
+            }
+            if (borrowerUser && borrowerUser._id) {
+                await EventDispatcher.dispatch({
+                    eventType: 'PAYMENT_RECEIVED',
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    recipientUserId: borrowerUser._id,
+                    payload: {
+                        title: 'Repayment Confirmed',
+                        body: `Your repayment of ₹${amountRupees} has been verified and recorded.`,
+                        type: 'PAYMENT_RECEIVED',
+                        loanId: loan._id.toString()
+                    },
+                    idempotencyKey: `${intentId}_BORROWER`
+                });
+            }
         } catch (notifErr) {
             console.error('[CommitPayment] Notification dispatch failed:', notifErr);
         }
@@ -389,8 +413,9 @@ exports.authorizeFirebasePhonePayment = async (req, res) => {
                 throw new Error('INTENT_ALREADY_CONSUMED');
             }
 
-            result = await FinancialLedgerService.recordPayment(loan, amountPaise, intentId, req.user.id, new Date(), paymentType);
-            await loan.save({ session });
+            const sessionLoan = await Loan.findById(loanId).session(session);
+            result = await FinancialLedgerService.recordPayment(sessionLoan, amountPaise, intentId, req.user.id, new Date(), paymentType);
+            await sessionLoan.save({ session });
             await session.commitTransaction();
 
             const { invalidateLoanCache } = require('../middleware/cache');
@@ -407,18 +432,37 @@ exports.authorizeFirebasePhonePayment = async (req, res) => {
         }
 
         try {
-            await EventDispatcher.dispatch({
-                eventType: 'PAYMENT_RECEIVED',
-                recipientUserId: req.user.id, 
-                data: { amountPaise, borrowerId: loan.borrower },
-                loanId
-            });
-            await EventDispatcher.dispatch({
-                eventType: 'PAYMENT_MADE',
-                recipientUserId: loan.borrower, 
-                data: { amountPaise },
-                loanId
-            });
+            const amountRupees = (amountPaise / 100).toFixed(2);
+            if (req.user && req.user._id) {
+                await EventDispatcher.dispatch({
+                    eventType: 'PAYMENT_RECEIVED',
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    recipientUserId: req.user._id,
+                    payload: {
+                        title: 'Repayment Recorded',
+                        body: `A repayment of ₹${amountRupees} has been confirmed on your credit record.`,
+                        type: 'PAYMENT_RECEIVED',
+                        loanId: loan._id.toString()
+                    },
+                    idempotencyKey: `${intentId}_LENDER`
+                });
+            }
+            if (borrower && borrower._id) {
+                await EventDispatcher.dispatch({
+                    eventType: 'PAYMENT_RECEIVED',
+                    aggregateType: 'LOAN',
+                    aggregateId: loan._id.toString(),
+                    recipientUserId: borrower._id,
+                    payload: {
+                        title: 'Repayment Confirmed',
+                        body: `Your repayment of ₹${amountRupees} has been verified and recorded.`,
+                        type: 'PAYMENT_RECEIVED',
+                        loanId: loan._id.toString()
+                    },
+                    idempotencyKey: `${intentId}_BORROWER`
+                });
+            }
         } catch (notifErr) {
             console.error('[AuthorizeFirebasePhone] Notification dispatch failed:', notifErr);
         }

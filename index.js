@@ -27,13 +27,14 @@ app.use(helmet({
 // ─── CORS ───────────────────────────────────────────────────────────────────
 const allowedOrigins = [
     'https://khataa-backend.onrender.com',
-    // Add your future web dashboard URL here if needed
+    'http://localhost:3000',
+    'http://localhost:5173',
 ];
 app.use(cors({
     origin: function (origin, callback) {
         // Allow requests with no origin (mobile apps, Postman, server-to-server)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
+        if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) return callback(null, true);
         return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -60,15 +61,6 @@ app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 // ─── NoSQL Injection & Parameter Pollution Protection ───────────────────────
 app.use(mongoSanitize()); // strips $, . from request body/params/query
 app.use(hpp());           // removes duplicate query params
-
-// ─── Static Files ───────────────────────────────────────────────────────────
-const path = require('path');
-const fs = require('fs');
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
-app.use('/uploads', express.static(uploadsDir));
 
 // ─── Ensure req.body always exists ──────────────────────────────────────────
 app.use((req, res, next) => {

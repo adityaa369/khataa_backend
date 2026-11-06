@@ -11,6 +11,7 @@ const {
     resendLoanOtp,
     updateProgress,
     uploadDocument,
+    deleteDocument,
     recordPayment,
     addCredit,
     recordInterest,
@@ -31,6 +32,7 @@ router.get('/taken', cacheMiddleware('taken_loans', 15), getTakenLoans);
 router.get('/portfolio-summary', getPortfolioSummary);
 router.get('/:id', getLoanById);
 router.post('/upload-document', uploadDocument);
+router.post('/delete-document', deleteDocument);
 router.post('/:id/verify', verifyLoan);
 router.post('/:id/verify-lender-otp', verifyLenderOtp);
 router.post('/:id/close-otp', requestClosureOtp);

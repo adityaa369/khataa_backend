@@ -33,6 +33,44 @@ exports.verifyOtp = async (req, res) => {
         }
 
         const registrationDetails = req.body.registrationDetails;
+        let existingUser = await User.findOne({ phone: phoneStr }).select('+password');
+
+        if (!registrationDetails) {
+            if (!existingUser) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Mobile number is not registered. Please create an account first.'
+                });
+            }
+            if (existingUser.isSuspended) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Your account has been suspended. Please contact support.'
+                });
+            }
+        } else {
+            if (existingUser && existingUser.firstName && existingUser.password) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'An account with this mobile number already exists. Please sign in.'
+                });
+            }
+            if (registrationDetails.email) {
+                const emailOwner = await User.findOne({
+                    email: registrationDetails.email.toLowerCase().trim(),
+                    phone: { $ne: phoneStr }
+                });
+                if (emailOwner) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'This email address is already registered with another account.'
+                    });
+                }
+            }
+        }
+
+        const wasRegistered = Boolean(existingUser && existingUser.firstName && existingUser.password);
+
         let updates = {};
         updates.firebaseUid = result.uid;
         if (registrationDetails) {
@@ -100,7 +138,7 @@ exports.verifyOtp = async (req, res) => {
         res.status(200).json({
             success: true,
             token,
-            isNewUser: !existingScore, // A newly created credit score indicates a new user
+            isNewUser: !wasRegistered,
             user
         });
     } catch (err) {
@@ -978,28 +1016,53 @@ exports.getFirebaseCustomToken = async (req, res) => {
 };
 
 
-// @desc    Sync Firebase State to Khatha DB
+// @desc    Sync Firebase State to HandCredit DB
 // @route   POST /api/auth/sync-firebase
 // @access  Private
 exports.syncFirebaseState = async (req, res) => {
     try {
-        const { emailVerified, email } = req.body;
+        const { emailVerified, email, idToken } = req.body;
         const User = require('../models/User');
         const user = await User.findOne({ id: req.user.id });
         
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
-        
-        if (emailVerified !== undefined) {
-            user.isEmailVerified = emailVerified;
+
+        let verifiedFromFirebase = null;
+        let emailFromFirebase = null;
+        if (idToken) {
+            try {
+                const admin = require('firebase-admin');
+                const decoded = await admin.auth().verifyIdToken(idToken);
+                if (decoded) {
+                    verifiedFromFirebase = Boolean(decoded.email_verified);
+                    if (decoded.email) emailFromFirebase = decoded.email;
+                }
+            } catch (_) {}
         }
-        if (email) {
-            user.email = email;
+        if (verifiedFromFirebase === null && user.firebaseUid && !user.firebaseUid.startsWith('mock_uid_')) {
+            try {
+                const admin = require('firebase-admin');
+                const fbUser = await admin.auth().getUser(user.firebaseUid);
+                if (fbUser) {
+                    verifiedFromFirebase = Boolean(fbUser.emailVerified);
+                    if (fbUser.email) emailFromFirebase = fbUser.email;
+                }
+            } catch (_) {}
+        }
+
+        if (verifiedFromFirebase !== null) {
+            user.isEmailVerified = verifiedFromFirebase || Boolean(emailVerified);
+        } else if (emailVerified !== undefined) {
+            user.isEmailVerified = Boolean(emailVerified);
+        }
+        if (emailFromFirebase || email) {
+            user.email = emailFromFirebase || email;
         }
         
         await user.save();
-        res.status(200).json({ success: true, message: 'Firebase state synced' });
+        res.status(200).json({ success: true, message: 'Firebase state synced', user });
     } catch (err) {
         console.error('[Auth] Error syncing firebase state:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });

@@ -1,4 +1,4 @@
-const { getRedisClient } = require('../config/redis');
+const { getRedisClient, cacheInvalidate } = require('../config/redis');
 
 /**
  * Middleware to check if response is cached
@@ -48,12 +48,21 @@ const cacheMiddleware = (keyPrefix, ttlSeconds = 300) => {
  * @param {string} userId - The ID of the user
  */
 const invalidateUserCache = async (userId) => {
+    if (!userId) return;
+    await cacheInvalidate(
+        `given_loans_${userId}`,
+        `taken_loans_${userId}`,
+        `loans:given:${userId}`,
+        `loans:taken:${userId}`
+    );
     const client = getRedisClient();
     if (!client || client.status !== 'ready') return;
     try {
         const keys = [
             `given_loans_${userId}`,
-            `taken_loans_${userId}`
+            `taken_loans_${userId}`,
+            `loans:given:${userId}`,
+            `loans:taken:${userId}`
         ];
         await client.del(...keys);
         console.log(`[Redis] Invalidated cache for user ${userId}`);

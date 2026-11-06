@@ -22,7 +22,8 @@ router.get('/', protect, async (req, res) => {
       CHIT_FUNDS: ['CHIT_INVITE', 'CHIT_JOINED', 'CHIT_CONTRIBUTION_DUE', 'AUCTION_OPENED', 'AUCTION_CLOSED', 'CHIT_PAYOUT'],
     };
 
-    const query = { userId: req.user.id };
+    const userIds = [req.user.id, req.user._id ? req.user._id.toString() : null].filter(Boolean);
+    const query = { userId: { $in: userIds } };
     if (eventCategory && categoryMap[eventCategory]) {
       query.eventType = { $in: categoryMap[eventCategory] };
     }
@@ -30,7 +31,7 @@ router.get('/', protect, async (req, res) => {
     const [notifications, total, unreadCount] = await Promise.all([
       Notification.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       Notification.countDocuments(query),
-      Notification.countDocuments({ userId: req.user.id, isRead: false }),
+      Notification.countDocuments({ userId: { $in: userIds }, isRead: false }),
     ]);
 
     res.json({
@@ -48,7 +49,8 @@ router.get('/', protect, async (req, res) => {
 // GET /api/notifications/unread-count
 router.get('/unread-count', protect, async (req, res) => {
   try {
-    const count = await Notification.countDocuments({ userId: req.user.id, isRead: false });
+    const userIds = [req.user.id, req.user._id ? req.user._id.toString() : null].filter(Boolean);
+    const count = await Notification.countDocuments({ userId: { $in: userIds }, isRead: false });
     res.json({ success: true, count });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Server error' });
@@ -58,8 +60,9 @@ router.get('/unread-count', protect, async (req, res) => {
 // PUT /api/notifications/:id/read — mark single as read
 router.put('/:id/read', protect, async (req, res) => {
   try {
+    const userIds = [req.user.id, req.user._id ? req.user._id.toString() : null].filter(Boolean);
     const notification = await Notification.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user.id },
+      { _id: req.params.id, userId: { $in: userIds } },
       { isRead: true, readAt: new Date() },
       { new: true }
     );
@@ -77,8 +80,9 @@ router.put('/:id/read', protect, async (req, res) => {
 router.put('/read-all', protect, async (req, res) => {
   try {
     const now = new Date();
+    const userIds = [req.user.id, req.user._id ? req.user._id.toString() : null].filter(Boolean);
     await Notification.updateMany(
-      { userId: req.user.id, isRead: false },
+      { userId: { $in: userIds }, isRead: false },
       { isRead: true, readAt: now }
     );
     res.json({ success: true, message: 'All notifications marked as read' });
