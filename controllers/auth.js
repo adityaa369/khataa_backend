@@ -1063,8 +1063,18 @@ exports.getSessions = async (req, res) => {
 // @access  Private
 exports.getSecurityEvents = async (req, res) => {
     try {
-        // Return empty list until security event logging is built out
-        res.status(200).json({ success: true, events: [] });
+        const SecurityEvent = require('../models/SecurityEvent');
+        const events = await SecurityEvent.find({
+            $or: [
+                { actorId: req.user.id },
+                { userId: req.user._id }
+            ]
+        })
+            .sort({ createdAt: -1 })
+            .limit(25)
+            .lean();
+
+        res.status(200).json({ success: true, events });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Server error' });
     }
@@ -1253,9 +1263,15 @@ exports.changeMpin = async (req, res) => {
 
         const SecurityEvent = require('../models/SecurityEvent');
         await SecurityEvent.create({
+            eventId: crypto.randomUUID(),
             userId: req.user._id,
+            actorType: 'USER',
+            actorId: req.user.id,
             eventType: 'MPIN_CHANGED',
-            ipAddress: req.ip,
+            severity: 'MEDIUM',
+            route: req.originalUrl || '/api/auth/mpin/change',
+            result: 'SUCCESS',
+            ipReference: req.ip || 'N/A',
             userAgent: req.headers['user-agent'] || 'Unknown'
         });
 

@@ -1,0 +1,25 @@
+name: Render Backend 5-Min Keep-Alive Health Check
+
+on:
+  schedule:
+    # Runs every 5 minutes to prevent Render free-tier 15-min inactivity spin-down
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  keep-alive-ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping HandCredit Backend Health Endpoint
+        run: |
+          BACKEND_URL="${BACKEND_PUBLIC_URL:-https://khataa-backend.onrender.com}"
+          echo "Pinging ${BACKEND_URL}/api/health ..."
+          HTTP_STATUS=$(curl -s -o /tmp/health_response.json -w "%{http_code}" --max-time 30 "${BACKEND_URL}/api/health?source=github-actions-5m")
+          cat /tmp/health_response.json || true
+          echo ""
+          echo "HTTP Status: ${HTTP_STATUS}"
+          if [ "${HTTP_STATUS}" -lt 200 ] || [ "${HTTP_STATUS}" -ge 400 ]; then
+            echo "Warning: Health check returned status ${HTTP_STATUS}"
+            exit 1
+          fi

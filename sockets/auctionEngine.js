@@ -11,16 +11,18 @@ const ChitGroup = require('../models/ChitGroup');
 const redisClient = getRedisClient();
 
 const activeAuctions = {}; // In-memory fallback/cache
+let ioInstance = null;
 
 function initAuctionEngine(server) {
     const io = new Server(server, {
         cors: {
             origin: process.env.NODE_ENV === 'production'
-                ? ['https://khataa-backend.onrender.com']
-                : ['http://localhost:3000', 'http://localhost:8080'],
+                ? ['https://khataa-backend.onrender.com', 'https://ops.khatha.app', 'https://khatha-admin.vercel.app']
+                : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080'],
             credentials: true
         }
     });
+    ioInstance = io;
 
     // Auth middleware — runs before any connection is accepted
     io.use(async (socket, next) => {
@@ -153,5 +155,8 @@ function initAuctionEngine(server) {
 
     return io;
 }
+
+initAuctionEngine.getIo = () => ioInstance;
+initAuctionEngine.initAuctionEngine = initAuctionEngine;
 
 module.exports = initAuctionEngine;

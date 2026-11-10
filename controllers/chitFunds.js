@@ -716,8 +716,8 @@ exports.declareWinner = async (req, res) => {
             const User = require('../models/User');
             const winner = await User.findOne({ id: winnerBid.userId });
             if (winner && winner.fcmToken) {
-                const { sendNotification } = require('../utils/notifications');
-                await sendNotification(winner.fcmToken, 'Congratulations! 🎉', `You won the auction for ${chit.name}! Amount: ₹${winnerBid.amount}`);
+                const { sendPushNotification } = require('../utils/fcm');
+                await sendPushNotification(winner.fcmToken, 'Congratulations! 🎉', `You won the auction for ${chit.name}! Amount: ₹${winnerBid.amount}`);
             }
         } catch (_) {}
 

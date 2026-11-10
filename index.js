@@ -9,6 +9,7 @@ const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const hpp = require('hpp');
 const http = require('http');
+const path = require('path');
 
 dotenv.config();
 
@@ -46,13 +47,46 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Request-Id',
+        'X-Idempotency-Key',
+        'X-App-Platform',
+        'X-MFA-Token',
+        'X-Keep-Alive-Probe',
+        'Accept',
+        'Cache-Control',
+        'Pragma'
+    ],
 }));
+
+// ─── Fast Keep-Alive & Load-Balancer Health Endpoints (Exempt from Rate Limit) ─
+const { getKeepAliveStatus } = require('./workers/KeepAliveWorker');
+const healthHandler = (req, res) => {
+    const mongoReady = mongoose.connection.readyState === 1;
+    res.status(200).json({
+        success: true,
+        status: mongoReady ? 'HEALTHY' : 'DEGRADED',
+        service: 'handcredit-backend',
+        database: mongoReady ? 'CONNECTED' : 'DISCONNECTED',
+        uptimeSeconds: Math.round(process.uptime()),
+        timestamp: new Date().toISOString(),
+        keepAlive: getKeepAliveStatus()
+    });
+};
+app.get('/api/health', healthHandler);
+app.get('/healthz', healthHandler);
+
+// ─── Self-Hosted Admin Control Plane UI (/admin) ────────────────────────────
+app.get(['/admin', '/admin-console'], (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin-console.html'));
+});
 
 // ─── Rate Limiting ──────────────────────────────────────────────────────────
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200,
+    max: 600,
     message: { success: false, message: 'Too many requests, please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -154,6 +188,11 @@ if (process.env.NODE_ENV !== 'production') {
 
 // ─── Global Error Handler ───────────────────────────────────────────────────
 app.use((err, req, res, next) => {
+    res.locals.errorMessage = err?.message || 'Internal Server Error';
+    res.locals.errorCode = err?.code || err?.name || 'UNHANDLED_ERROR';
+    if (err?.stack) {
+        res.locals.errorStack = err.stack.split('\n').slice(0, 4).map(s => s.trim()).join(' | ');
+    }
     if (err.message === 'Not allowed by CORS') {
         return res.status(403).json({ success: false, message: 'CORS policy violation' });
     }
@@ -186,12 +225,14 @@ mongoose.connect(MONGO_URI)
         const PaymentReminderWorker = require('./workers/PaymentReminderWorker');
         const OperationalStateMonitor = require('./workers/OperationalStateMonitor');
         const ReconciliationEngine = require('./workers/ReconciliationEngine');
+        const KeepAliveWorker = require('./workers/KeepAliveWorker');
 
         setInterval(() => NotificationWorker.processOutbox().catch(console.error), 10 * 1000); // 10s
         setInterval(() => InterestAccrualWorker.runDailyAccrual().catch(console.error), 60 * 60 * 1000); // 1h
         setInterval(() => PaymentReminderWorker.runDailyReminders().catch(console.error), 60 * 60 * 1000); // 1h
         setInterval(() => OperationalStateMonitor.runMonitor().catch(console.error), 5 * 60 * 1000); // 5m
         setInterval(() => ReconciliationEngine.runReconciliation().catch(console.error), 60 * 60 * 1000); // 1h
+        KeepAliveWorker.startKeepAlive(5 * 60 * 1000); // 5m anti-spin-down health check
         
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`\n--- Khaata Server Live ---`);

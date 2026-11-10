@@ -24,7 +24,11 @@ const protectAdmin = async (req, res, next) => {
             req.adminSession = decoded;
 
             const store = require('../utils/asyncContext').asyncLocalStorage.getStore();
-            if (store) store.userId = `ADMIN:${admin._id}`;
+            if (store) {
+                store.userId = `ADMIN:${admin.email || admin._id}`;
+                store.actorType = 'ADMIN';
+                store.actorEmail = admin.email;
+            }
             return next();
         }
 
@@ -49,7 +53,11 @@ const protectAdmin = async (req, res, next) => {
             };
 
             const store = require('../utils/asyncContext').asyncLocalStorage.getStore();
-            if (store) store.userId = `ADMIN:${user._id}`;
+            if (store) {
+                store.userId = `ADMIN:${req.admin.email}`;
+                store.actorType = 'ADMIN';
+                store.actorEmail = req.admin.email;
+            }
             return next();
         }
 

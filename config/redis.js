@@ -8,7 +8,6 @@ function getRedisClient() {
 
     const redisUrl = process.env.REDIS_URL;
     if (!redisUrl) {
-        console.log('[REDIS] REDIS_URL not set — caching disabled, app will work without Redis.');
         return null;
     }
 
@@ -17,12 +16,12 @@ function getRedisClient() {
         enableReadyCheck: false,
         reconnectOnError: (err) => {
             const targetError = 'READONLY';
-            if (err.message.includes(targetError)) return true;
+            if (err && err.message && err.message.includes(targetError)) return true;
             return false;
         },
         retryStrategy: (times) => {
             if (times > 5) {
-                console.log('[REDIS] Max retries reached — disabling Redis cache.');
+                console.log('[REDIS] Max retries reached — using in-memory cache fallback.');
                 redisAvailable = false;
                 return null; // stop retrying
             }
@@ -34,6 +33,10 @@ function getRedisClient() {
     redisClient.on('connect', () => {
         redisAvailable = true;
         console.log('[REDIS] Connected successfully.');
+    });
+
+    redisClient.on('ready', () => {
+        redisAvailable = true;
     });
 
     redisClient.on('error', (err) => {
@@ -54,6 +57,28 @@ function getRedisClient() {
     return redisClient;
 }
 
+function isRedisAvailable() {
+    return Boolean(redisAvailable && redisClient && redisClient.status === 'ready');
+}
+
+async function connectRedisStrict() {
+    const client = getRedisClient();
+    if (!client) {
+        return false;
+    }
+    try {
+        if (client.status !== 'ready') {
+            await client.connect();
+        }
+        const pong = await client.ping();
+        redisAvailable = pong === 'PONG';
+        return redisAvailable;
+    } catch {
+        redisAvailable = false;
+        return false;
+    }
+}
+
 // In-memory fallback
 const memCache = new Map();
 
@@ -63,6 +88,7 @@ async function cacheGet(key) {
         if (!client || !redisAvailable) {
             const val = memCache.get(key);
             if (val && val.expires > Date.now()) return val.data;
+            if (val) memCache.delete(key);
             return null;
         }
         const val = await client.get(key);
@@ -74,22 +100,23 @@ async function cacheGet(key) {
 
 async function cacheSet(key, value, ttlSeconds = 120) {
     try {
+        memCache.set(key, { data: value, expires: Date.now() + (ttlSeconds * 1000) });
         const client = getRedisClient();
         if (!client || !redisAvailable) {
-            memCache.set(key, { data: value, expires: Date.now() + (ttlSeconds * 1000) });
-            return;
+            return true;
         }
         await client.setex(key, ttlSeconds, JSON.stringify(value));
+        return true;
     } catch {
-        // silent
+        return false;
     }
 }
 
 async function cacheInvalidate(...keys) {
     try {
+        keys.forEach(k => memCache.delete(k));
         const client = getRedisClient();
         if (!client || !redisAvailable) {
-            keys.forEach(k => memCache.delete(k));
             return;
         }
         if (keys.length > 0) await client.del(...keys);
@@ -100,13 +127,12 @@ async function cacheInvalidate(...keys) {
 
 async function cacheInvalidatePattern(pattern) {
     try {
+        const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+        for (const k of memCache.keys()) {
+            if (regex.test(k)) memCache.delete(k);
+        }
         const client = getRedisClient();
         if (!client || !redisAvailable) {
-            // Very naive pattern match for memory fallback
-            const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-            for (const k of memCache.keys()) {
-                if (regex.test(k)) memCache.delete(k);
-            }
             return;
         }
         const keys = await client.keys(pattern);
@@ -116,4 +142,25 @@ async function cacheInvalidatePattern(pattern) {
     }
 }
 
-module.exports = { getRedisClient, cacheGet, cacheSet, cacheInvalidate, cacheInvalidatePattern };
+async function flushAllCache() {
+    try {
+        memCache.clear();
+        const client = getRedisClient();
+        if (client && redisAvailable) {
+            await client.flushdb();
+        }
+    } catch {
+        // silent
+    }
+}
+
+module.exports = {
+    getRedisClient,
+    isRedisAvailable,
+    connectRedisStrict,
+    cacheGet,
+    cacheSet,
+    cacheInvalidate,
+    cacheInvalidatePattern,
+    flushAllCache,
+};

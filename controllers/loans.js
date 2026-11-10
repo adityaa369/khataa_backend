@@ -13,6 +13,11 @@ const { cacheGet, cacheSet, cacheInvalidate } = require('../config/redis');
 const { loanSerializer, chitFundSerializer } = require('../utils/loanSerializer');
 
 function sendError(res, err, status = 500) {
+    res.locals.errorMessage = err?.message || 'An internal error occurred';
+    res.locals.errorCode = err?.code || err?.name || 'LOAN_CONTROLLER_ERROR';
+    if (err?.stack) {
+        res.locals.errorStack = err.stack.split('\n').slice(0, 4).map(s => s.trim()).join(' | ');
+    }
     const isProd = process.env.NODE_ENV === 'production';
     return res.status(status).json({
         success: false,
@@ -916,7 +921,6 @@ exports.closeLoan = async (req, res) => {
         res.status(200).json({ success: true, message: 'Loan successfully closed.', loan });
     } catch (err) {
         console.error('[Loans] closeLoan Error:', err.message);
-        const { sendError } = require('../utils/response');
         sendError(res, err);
     }
 };

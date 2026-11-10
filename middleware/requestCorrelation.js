@@ -5,18 +5,25 @@ module.exports = (req, res, next) => {
     const requestId = req.headers['x-request-id'] || crypto.randomUUID();
     req.id = requestId;
     res.setHeader('X-Request-Id', requestId);
-    
-    // Create a new async context for this request
+
+    const cleanPath = (req.originalUrl || req.url || '').split('?')[0];
+    const clientIp = (req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : null) || req.ip || req.socket?.remoteAddress || 'UNKNOWN';
+
     const store = {
         requestId,
-        userId: 'ANONYMOUS' // Will be populated by auth middleware
+        userId: 'ANONYMOUS',
+        actorType: 'ANONYMOUS',
+        ip: clientIp,
+        method: req.method,
+        path: cleanPath,
+        userAgent: (req.headers['user-agent'] || 'Unknown').slice(0, 120)
     };
 
     asyncLocalStorage.run(store, () => {
         const start = Date.now();
         res.on('finish', () => {
             try {
-                if (req.originalUrl.startsWith('/health/')) return;
+                if (cleanPath.startsWith('/health') || cleanPath === '/api/health' || cleanPath === '/api/test') return;
 
                 const durationMs = Date.now() - start;
                 const success = res.statusCode < 400;
@@ -25,9 +32,9 @@ module.exports = (req, res, next) => {
 
                 const accessLog = {
                     type: 'access',
-                    operation: `${req.method} ${req.route ? req.route.path : req.originalUrl.split('?')[0]}`,
+                    operation: `${req.method} ${req.route ? req.route.path : cleanPath}`,
                     method: req.method,
-                    route: req.originalUrl,
+                    route: cleanPath,
                     statusCode: res.statusCode,
                     success,
                     durationMs
@@ -38,9 +45,12 @@ module.exports = (req, res, next) => {
                 if (!success && res.locals.errorCode) {
                     accessLog.errorCode = res.locals.errorCode;
                 }
+                if (!success && res.locals.errorMessage) {
+                    accessLog.errorMessage = res.locals.errorMessage;
+                }
 
                 console.info(accessLog);
-            } catch(e) {
+            } catch (e) {
                 console.error('[Telemetry Fault]', e.message);
             }
         });

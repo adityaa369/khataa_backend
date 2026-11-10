@@ -6,16 +6,43 @@ const Admin = require('../models/Admin');
 const User = require('../models/User');
 const Loan = require('../models/Loan');
 const ChitFund = require('../models/ChitFund');
+const ChitSubscription = require('../models/ChitSubscription');
 const CreditScore = require('../models/CreditScore');
 const LedgerEntry = require('../models/LedgerEntry');
 const Transaction = require('../models/Transaction');
+const TransactionIntent = require('../models/TransactionIntent');
+const Notification = require('../models/Notification');
+const NotificationOutbox = require('../models/NotificationOutbox');
+const MPinCredential = require('../models/MPinCredential');
+const DeviceToken = require('../models/DeviceToken');
+const Session = require('../models/Session');
+const SecurityEvent = require('../models/SecurityEvent');
 const ReconciliationIncident = require('../models/ReconciliationIncident');
 const FinancialKillSwitch = require('../models/FinancialKillSwitch');
-const { cacheSet, cacheGet, getRedisClient, isRedisAvailable } = require('../config/redis');
+const Otp = require('../models/Otp');
+const {
+    cacheSet,
+    cacheGet,
+    getRedisClient,
+    isRedisAvailable,
+    flushAllCache
+} = require('../config/redis');
 const { logAdminAction } = require('../middleware/adminAuth');
-const { getMetricsSnapshot } = require('../middleware/metrics');
+const {
+    getMetricsSnapshot,
+    getApiFailures,
+    getSlowRequests,
+    getRouteMetricsList,
+    clearTelemetryHistory
+} = require('../middleware/metrics');
+const { getKeepAliveStatus, pingNow } = require('../workers/KeepAliveWorker');
 
 function sendError(res, err, status = 500) {
+    res.locals.errorMessage = err?.message || 'Internal Server Error';
+    res.locals.errorCode = err?.code || err?.name || 'ADMIN_CONTROLLER_ERROR';
+    if (err?.stack) {
+        res.locals.errorStack = err.stack.split('\n').slice(0, 4).map(s => s.trim()).join(' | ');
+    }
     const isProd = process.env.NODE_ENV === 'production';
     return res.status(status).json({
         success: false,
@@ -104,17 +131,64 @@ exports.login = async (req, res) => {
         return res.status(401).json({ success: false, message: 'Invalid operator credentials' });
     } catch (err) {
         console.error('[Admin Login Error]', err.message);
-        return res.status(500).json({ success: false, message: 'Internal Server Error during login' });
+        return sendError(res, err, 500);
     }
 };
 
-// @desc    Operations Dashboard Snapshot
+// @desc    Operations Dashboard Snapshot (Unified V1 + V2 + Live Platform & Ledger Metrics)
 // @route   GET /api/admin/dashboard
 exports.getDashboard = async (req, res) => {
     try {
-        const incidents = await ReconciliationIncident.aggregate([
-            { $group: { _id: '$status', count: { $sum: 1 } } }
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+
+        const [
+            incidents,
+            registeredUsers,
+            activeCredits,
+            totalLoans,
+            activeLoanDocs,
+            txToday,
+            ledgerToday
+        ] = await Promise.all([
+            ReconciliationIncident.aggregate([
+                { $group: { _id: '$status', count: { $sum: 1 } } }
+            ]),
+            User.countDocuments(),
+            Loan.countDocuments({ status: 'active' }),
+            Loan.countDocuments(),
+            Loan.find({ status: 'active' })
+                .select('amount amountPaise totalPayable totalPayablePaise paidAmount paidAmountPaise principalOutstandingPaise interestOutstandingPaise')
+                .lean(),
+            Transaction.aggregate([
+                { $match: { type: 'PAYMENT', createdAt: { $gte: startOfToday } } },
+                { $group: { _id: null, totalPaise: { $sum: '$amountPaise' }, count: { $sum: 1 } } }
+            ]),
+            LedgerEntry.aggregate([
+                { $match: { type: 'CREDIT', createdAt: { $gte: startOfToday } } },
+                { $group: { _id: null, totalPaise: { $sum: '$amountPaise' }, count: { $sum: 1 } } }
+            ])
         ]);
+
+        let outstandingPaise = 0;
+        activeLoanDocs.forEach(l => {
+            if (typeof l.principalOutstandingPaise === 'number') {
+                outstandingPaise += Math.max(0, l.principalOutstandingPaise + (l.interestOutstandingPaise || 0));
+            } else if (typeof l.totalPayablePaise === 'number') {
+                outstandingPaise += Math.max(0, l.totalPayablePaise - (l.paidAmountPaise || 0));
+            } else {
+                const totalPayableR = l.totalPayable || l.amount || 0;
+                const paidR = l.paidAmount || 0;
+                outstandingPaise += Math.max(0, Math.round((totalPayableR - paidR) * 100));
+            }
+        });
+
+        const paymentsTodayPaise = txToday[0]?.totalPaise || ledgerToday[0]?.totalPaise || 0;
+        const paymentsCount = txToday[0]?.count || ledgerToday[0]?.count || 0;
+
+        const openIncidentsCount = incidents
+            .filter(i => i._id !== 'RESOLVED')
+            .reduce((acc, cur) => acc + (cur.count || 0), 0);
 
         let killSwitchEnabled = false;
         const cachedKs = await cacheGet('FINANCIAL_KILL_SWITCH');
@@ -135,20 +209,20 @@ exports.getDashboard = async (req, res) => {
                 dbStatus = 'DISCONNECTED';
             }
         }
-        const dbLatency = Number(process.hrtime.bigint() - dbStart) / 1e6;
+        const dbLatency = Math.max(1, Math.round(Number(process.hrtime.bigint() - dbStart) / 1e6));
 
         // Redis / Cache Latency check (graceful fallback when REDIS_URL is not configured)
         const redisStart = process.hrtime.bigint();
-        let redisStatus = isRedisAvailable() ? 'READY' : 'IN_MEMORY_FALLBACK';
-        if (redisStatus === 'READY') {
+        let redisMode = isRedisAvailable() ? 'READY' : 'IN_MEMORY_FALLBACK';
+        if (redisMode === 'READY') {
             try {
                 const client = getRedisClient();
                 await client.ping();
             } catch {
-                redisStatus = 'IN_MEMORY_FALLBACK';
+                redisMode = 'IN_MEMORY_FALLBACK';
             }
         }
-        const redisLatency = Number(process.hrtime.bigint() - redisStart) / 1e6;
+        const redisLatency = Math.max(1, Math.round(Number(process.hrtime.bigint() - redisStart) / 1e6));
 
         let wsConnections = 0;
         try {
@@ -161,27 +235,769 @@ exports.getDashboard = async (req, res) => {
             wsConnections = 0;
         }
 
+        const keepAlive = getKeepAliveStatus();
+        const healthSnapshot = getMetricsSnapshot();
+
         const infrastructure = {
-            database: { status: dbStatus, latencyMs: Math.round(dbLatency) },
-            redis: { status: 'READY', mode: redisStatus, latencyMs: Math.round(redisLatency) },
+            database: { status: dbStatus, latencyMs: dbLatency },
+            redis: { status: 'READY', mode: redisMode, latencyMs: redisLatency },
             server: {
                 cpuCount: os.cpus().length,
                 loadAvg: os.loadavg(),
                 memory: process.memoryUsage(),
-                uptime: process.uptime(),
-                pm2Workers: process.env.instances || 1
+                uptime: Math.round(process.uptime()),
+                pm2Workers: Number(process.env.instances || 1)
             },
             websockets: {
                 activeConnections: wsConnections
-            }
+            },
+            keepAlive
+        };
+
+        const platform = {
+            registeredUsers,
+            totalUsers: registeredUsers,
+            activeCredits,
+            activeLoans: activeCredits,
+            totalLoans,
+            outstandingPaise,
+            activeOutstandingBalancePaise: outstandingPaise,
+            outstandingRupees: Math.round(outstandingPaise / 100),
+            paymentsTodayPaise,
+            repaymentsTodayPaise: paymentsTodayPaise,
+            repaymentsTodayRupees: Math.round(paymentsTodayPaise / 100),
+            paymentsCount,
+            ledgerReconciliation: openIncidentsCount === 0 ? 'BALANCED' : 'ATTENTION_REQUIRED',
+            ledgerBalanced: openIncidentsCount === 0,
+            openIncidents: openIncidentsCount,
+            dbLatencyMs: dbLatency,
+            killSwitchEnabled
         };
 
         res.status(200).json({
             success: true,
-            health: getMetricsSnapshot(),
+            status: dbStatus === 'CONNECTED' ? 'ONLINE' : 'DEGRADED',
+            apiStatus: 'ONLINE',
+            mongoStatus: dbStatus === 'CONNECTED' ? 'ONLINE' : 'OFFLINE',
+            lastVerifiedAt: new Date().toISOString(),
+            health: healthSnapshot,
             infrastructure,
+            platform,
+            metrics: platform,
+            data: {
+                ...platform,
+                health: healthSnapshot,
+                infrastructure,
+                incidents,
+                killSwitchEnabled
+            },
+            registeredUsers,
+            totalUsers: registeredUsers,
+            activeCredits,
+            activeLoans: activeCredits,
+            outstandingPaise,
+            activeOutstandingBalancePaise: outstandingPaise,
+            paymentsTodayPaise,
+            repaymentsTodayPaise: paymentsTodayPaise,
+            paymentsCount,
+            ledgerReconciliation: platform.ledgerReconciliation,
+            ledgerBalanced: platform.ledgerBalanced,
+            openIncidents: openIncidentsCount,
+            dbLatencyMs: dbLatency,
             incidents,
             killSwitchEnabled
+        });
+    } catch (err) {
+        sendError(res, err);
+    }
+};
+
+// @desc    Observability Dashboard 1: App Latency, Bottlenecks & User-Facing Issues
+// @route   GET /api/admin/observability/latency-errors
+exports.getLatencyAndUserIssues = async (req, res) => {
+    try {
+        const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+        const [
+            stuckIntents,
+            failedIntentsCount,
+            failedOutbox,
+            pendingOutboxCount,
+            unverifiedUsersCount,
+            suspendedUsersCount,
+            openIncidentsCount,
+            recentUserErrors
+        ] = await Promise.all([
+            TransactionIntent.find({
+                $or: [
+                    { status: 'PENDING', createdAt: { $lte: fiveMinsAgo } },
+                    { status: 'FAILED', createdAt: { $gte: twentyFourHoursAgo } }
+                ]
+            }).sort({ createdAt: -1 }).limit(25).lean().catch(() => []),
+            TransactionIntent.countDocuments({ status: 'FAILED' }).catch(() => 0),
+            NotificationOutbox.find({
+                status: { $in: ['FAILED', 'DEAD_LETTER'] }
+            }).sort({ updatedAt: -1 }).limit(25).lean().catch(() => []),
+            NotificationOutbox.countDocuments({ status: 'PENDING' }).catch(() => 0),
+            User.countDocuments({ isEmailVerified: false }),
+            User.countDocuments({ isSuspended: true }),
+            ReconciliationIncident.countDocuments({ status: { $ne: 'RESOLVED' } }),
+            SecurityEvent.find({
+                actorType: 'USER',
+                result: { $in: ['FAILED', 'BLOCKED'] }
+            }).sort({ createdAt: -1 }).limit(30).lean().catch(() => [])
+        ]);
+
+        const health = getMetricsSnapshot();
+        const slowRequests = getSlowRequests(50);
+        const routeBreakdown = getRouteMetricsList();
+        const keepAlive = getKeepAliveStatus();
+
+        res.status(200).json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            data: {
+                latency: {
+                    p50Ms: health.latency.p50,
+                    p95Ms: health.latency.p95,
+                    p99Ms: health.latency.p99,
+                    activeRequests: health.activeRequests,
+                    totalRequests: health.totalRequests || 0,
+                    totalErrors5xx: health.errors5xx || 0,
+                    totalErrors4xx: health.errors4xx || 0,
+                    uptimeSeconds: health.uptimeSeconds || Math.round(process.uptime())
+                },
+                slowRequests,
+                routeBreakdown,
+                userFacingIssues: {
+                    stuckOrFailedIntentsCount: stuckIntents.length,
+                    totalFailedIntents: failedIntentsCount,
+                    stuckIntents,
+                    failedNotificationsCount: failedOutbox.length,
+                    pendingNotificationsCount: pendingOutboxCount,
+                    failedNotifications: failedOutbox,
+                    unverifiedUsersCount,
+                    suspendedUsersCount,
+                    openReconciliationIncidents: openIncidentsCount,
+                    recentUserFrictionEvents: recentUserErrors
+                },
+                keepAlive
+            }
+        });
+    } catch (err) {
+        sendError(res, err);
+    }
+};
+
+// @desc    Observability Dashboard 2: API Failures, 5xx/4xx Traces & Root-Cause Explorer
+// @route   GET /api/admin/observability/api-failures
+exports.getApiFailuresDashboard = async (req, res) => {
+    try {
+        const limit = Math.min(200, parseInt(req.query.limit, 10) || 100);
+        const liveFailures = getApiFailures(limit);
+        const routeBreakdown = getRouteMetricsList();
+        const health = getMetricsSnapshot();
+
+        const persistedFailureEvents = await SecurityEvent.find({
+            $or: [
+                { eventType: 'API_5XX_SPIKE' },
+                { result: { $in: ['FAILED', 'BLOCKED'] } }
+            ]
+        })
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .lean();
+
+        const enrichedPersisted = persistedFailureEvents.map(ev => {
+            const isLegacyAnonymousSpike =
+                ev.eventType === 'API_5XX_SPIKE' &&
+                (!ev.route || ev.route === 'N/A') &&
+                (!ev.metadata || Object.keys(ev.metadata).length === 0);
+
+            return {
+                eventId: ev.eventId || String(ev._id),
+                timestamp: ev.createdAt,
+                eventType: ev.eventType,
+                severity: ev.severity,
+                actorType: ev.actorType || 'ANONYMOUS',
+                actorId: ev.actorId || 'Anonymous',
+                route: isLegacyAnonymousSpike
+                    ? '/api/admin/dashboard (Legacy pre-fix Redis helper crash)'
+                    : (ev.route || ev.metadata?.route || 'N/A'),
+                ipReference: ev.ipReference || 'N/A',
+                result: ev.result,
+                financialImpact: ev.financialImpact || 'NONE',
+                requestId: ev.requestId || 'N/A',
+                rootCause: isLegacyAnonymousSpike
+                    ? 'Resolved: config/redis.js was missing isRedisAvailable() export in commit e343f1f'
+                    : (ev.metadata?.errorMessage || ev.metadata?.reason || ev.metadata?.action || 'Recorded by security telemetry'),
+                statusCode: ev.metadata?.statusCode || (ev.eventType === 'API_5XX_SPIKE' ? 500 : 400),
+                durationMs: ev.metadata?.durationMs || null,
+                stackSummary: ev.metadata?.stackSummary || null,
+                isLegacyResolved: isLegacyAnonymousSpike
+            };
+        });
+
+        const failingRoutes = routeBreakdown.filter(r => r.errors5xx > 0 || r.errors4xx > 0);
+
+        res.status(200).json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            data: {
+                summary: {
+                    total5xx: health.errors5xx || 0,
+                    total4xx: health.errors4xx || 0,
+                    liveFailureTracesCount: liveFailures.length,
+                    persistedEventsCount: enrichedPersisted.length,
+                    legacyResolvedSpikesCount: enrichedPersisted.filter(e => e.isLegacyResolved).length,
+                    failingRoutesCount: failingRoutes.length
+                },
+                failingRoutes,
+                liveFailures,
+                persistedEvents: enrichedPersisted
+            }
+        });
+    } catch (err) {
+        sendError(res, err);
+    }
+};
+
+// @desc    Clear stale anonymous 5xx telemetry spikes & reset in-memory counters
+// @route   POST /api/admin/observability/clear-telemetry
+exports.clearStaleTelemetry = async (req, res) => {
+    try {
+        const mode = req.body.mode || 'STALE_5XX_ONLY'; // 'STALE_5XX_ONLY' | 'ALL_SECURITY_EVENTS'
+        let dbResult = { deletedCount: 0 };
+
+        if (mode === 'ALL_SECURITY_EVENTS') {
+            dbResult = await SecurityEvent.deleteMany({});
+        } else {
+            dbResult = await SecurityEvent.deleteMany({
+                eventType: 'API_5XX_SPIKE'
+            });
+        }
+
+        clearTelemetryHistory();
+
+        if (req.admin) {
+            await logAdminAction(
+                req.admin._id,
+                'CLEAR_TELEMETRY_SPIKES',
+                `Cleared ${dbResult.deletedCount} telemetry events (${mode}) and reset in-memory failure buffers`,
+                'SUCCESS',
+                req
+            );
+        }
+
+        res.status(200).json({
+            success: true,
+            deletedCount: dbResult.deletedCount,
+            message: `Cleared ${dbResult.deletedCount} telemetry events and reset live failure counters.`
+        });
+    } catch (err) {
+        sendError(res, err);
+    }
+};
+
+// @desc    Trigger immediate keep-alive health check probe
+// @route   POST /api/admin/observability/keep-alive/ping
+exports.triggerKeepAlivePing = async (req, res) => {
+    try {
+        const status = await pingNow('manual-admin-trigger');
+        res.status(200).json({ success: true, data: status });
+    } catch (err) {
+        sendError(res, err);
+    }
+};
+
+// ─── Live User Data Query & Purge Studio (Preserves Schema & Indexes) ───────
+
+const MANAGED_COLLECTIONS = {
+    users: { model: User, label: 'Users (Mobile Accounts)', category: 'USER_DATA', protected: false },
+    loans: { model: Loan, label: 'Loans / Credit Agreements', category: 'FINANCIAL_DATA', protected: false },
+    chitfunds: { model: ChitFund, label: 'Chit Funds', category: 'FINANCIAL_DATA', protected: false },
+    chitsubscriptions: { model: ChitSubscription, label: 'Chit Subscriptions', category: 'FINANCIAL_DATA', protected: false },
+    transactions: { model: Transaction, label: 'Transactions', category: 'FINANCIAL_DATA', protected: false },
+    ledgerentries: { model: LedgerEntry, label: 'Ledger Entries', category: 'FINANCIAL_DATA', protected: false },
+    transactionintents: { model: TransactionIntent, label: 'Transaction Intents (Idempotency)', category: 'FINANCIAL_DATA', protected: false },
+    creditscores: { model: CreditScore, label: 'Credit Scores / Trust Scores', category: 'USER_DATA', protected: false },
+    notifications: { model: Notification, label: 'User Notifications', category: 'USER_DATA', protected: false },
+    notificationoutboxes: { model: NotificationOutbox, label: 'Notification Outbox Queue', category: 'SYSTEM_QUEUE', protected: false },
+    mpincredentials: { model: MPinCredential, label: 'User MPIN Credentials', category: 'USER_DATA', protected: false },
+    devicetokens: { model: DeviceToken, label: 'FCM Device Tokens', category: 'USER_DATA', protected: false },
+    sessions: { model: Session, label: 'User Sessions', category: 'USER_DATA', protected: false },
+    otps: { model: Otp, label: 'Temporary OTP Records', category: 'USER_DATA', protected: false },
+    reconciliationincidents: { model: ReconciliationIncident, label: 'Reconciliation Incidents', category: 'TELEMETRY_DATA', protected: false },
+    securityevents: { model: SecurityEvent, label: 'Security Telemetry Events', category: 'TELEMETRY_DATA', protected: false },
+    admins: { model: Admin, label: 'Admin Control Plane Operators', category: 'CONTROL_PLANE', protected: true },
+    financialkillswitches: { model: FinancialKillSwitch, label: 'Financial Kill Switch Config', category: 'CONTROL_PLANE', protected: true }
+};
+
+function sanitizeMongoFilter(rawFilter = {}) {
+    if (!rawFilter || typeof rawFilter !== 'object' || Array.isArray(rawFilter)) {
+        return {};
+    }
+    const forbiddenKeys = new Set(['$where', '$function', '$accumulator', '$expr']);
+    const clean = {};
+    for (const [k, v] of Object.entries(rawFilter)) {
+        if (forbiddenKeys.has(k)) continue;
+        if (v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof RegExp)) {
+            clean[k] = sanitizeMongoFilter(v);
+        } else {
+            clean[k] = v;
+        }
+    }
+    return clean;
+}
+
+function buildSmartFilter(collectionKey, body = {}) {
+    const filter = sanitizeMongoFilter(body.filter || {});
+    const search = (body.search || '').trim();
+    const phone = (body.phone || '').trim();
+    const email = (body.email || '').trim().toLowerCase();
+    const userId = (body.userId || '').trim();
+    const status = (body.status || '').trim();
+
+    if (collectionKey === 'users') {
+        if (phone) filter.phone = { $regex: phone.replace(/\D/g, ''), $options: 'i' };
+        if (email) filter.email = email;
+        if (userId) {
+            if (mongoose.Types.ObjectId.isValid(userId)) {
+                filter.$or = [{ id: userId }, { _id: userId }];
+            } else {
+                filter.id = userId;
+            }
+        }
+        if (search && !phone && !email && !userId) {
+            filter.$or = [
+                { phone: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { firstName: { $regex: search, $options: 'i' } },
+                { lastName: { $regex: search, $options: 'i' } },
+                { id: search }
+            ];
+        }
+    } else if (collectionKey === 'loans') {
+        if (status && status !== 'ALL') filter.status = status;
+        if (phone) filter.borrowerPhone = { $regex: phone.replace(/\D/g, ''), $options: 'i' };
+        if (userId) filter.$or = [{ lender: userId }, { borrower: userId }];
+        if (search && !phone && !userId) {
+            filter.$or = [
+                { borrowerName: { $regex: search, $options: 'i' } },
+                { borrowerPhone: { $regex: search, $options: 'i' } },
+                { lender: search },
+                { borrower: search }
+            ];
+        }
+    } else if (collectionKey === 'securityevents') {
+        if (status && status !== 'ALL') filter.eventType = status;
+        if (userId) filter.actorId = userId;
+        if (search && !userId) {
+            filter.$or = [
+                { eventType: { $regex: search, $options: 'i' } },
+                { actorId: { $regex: search, $options: 'i' } },
+                { route: { $regex: search, $options: 'i' } }
+            ];
+        }
+    } else {
+        if (status && status !== 'ALL') filter.status = status;
+        if (userId) {
+            filter.$or = [
+                { user: userId },
+                { userId: userId },
+                { actorId: userId },
+                { owner: userId },
+                { account: userId }
+            ];
+        }
+    }
+
+    return filter;
+}
+
+// @desc    Get all database collections with live document counts & schema/index status
+// @route   GET /api/admin/data/collections
+exports.getDatabaseCollections = async (req, res) => {
+    try {
+        const entries = await Promise.all(
+            Object.entries(MANAGED_COLLECTIONS).map(async ([key, cfg]) => {
+                let documentCount = 0;
+                let indexCount = 0;
+                let schemaFields = [];
+                try {
+                    documentCount = await cfg.model.countDocuments();
+                    const indexes = await cfg.model.collection.indexes().catch(() => []);
+                    indexCount = Array.isArray(indexes) ? indexes.length : 1;
+                    schemaFields = Object.keys(cfg.model.schema.paths)
+                        .filter(p => !p.startsWith('__') && p !== 'password' && p !== 'passwordHash')
+                        .slice(0, 12);
+                } catch {
+                    documentCount = 0;
+                }
+                return {
+                    key,
+                    collectionName: cfg.model.collection.collectionName,
+                    label: cfg.label,
+                    category: cfg.category,
+                    protected: cfg.protected,
+                    documentCount,
+                    indexCount,
+                    schemaPreserved: true,
+                    schemaFields
+                };
+            })
+        );
+
+        const totalUserDocs = entries
+            .filter(e => !e.protected)
+            .reduce((sum, e) => sum + e.documentCount, 0);
+
+        res.status(200).json({
+            success: true,
+            totalUserDocuments: totalUserDocs,
+            collections: entries
+        });
+    } catch (err) {
+        sendError(res, err);
+    }
+};
+
+// @desc    Preview documents matching a query before deleting user data
+// @route   POST /api/admin/data/query-preview
+exports.previewDataQuery = async (req, res) => {
+    try {
+        const target = (req.body.target || 'users').toLowerCase().trim();
+        const cfg = MANAGED_COLLECTIONS[target];
+        if (!cfg) {
+            return res.status(400).json({
+                success: false,
+                message: `Unknown target collection: ${target}`
+            });
+        }
+
+        const filter = buildSmartFilter(target, req.body);
+        const limit = Math.min(50, parseInt(req.body.limit, 10) || 20);
+
+        const [matchingCount, sampleDocs] = await Promise.all([
+            cfg.model.countDocuments(filter),
+            cfg.model
+                .find(filter)
+                .select('-password -passwordHash -mpinHash -emailVerificationToken -pan -aadhar')
+                .sort({ createdAt: -1, _id: -1 })
+                .limit(limit)
+                .lean()
+        ]);
+
+        res.status(200).json({
+            success: true,
+            target,
+            label: cfg.label,
+            protected: cfg.protected,
+            appliedFilter: filter,
+            matchingCount,
+            sampleDocs
+        });
+    } catch (err) {
+        sendError(res, err);
+    }
+};
+
+// Helper to cascade delete a single user's data across all collections while keeping schemas intact
+async function deleteSingleUserCascade(userDoc, options = {}) {
+    const uid = userDoc.id || String(userDoc._id);
+    const mongoId = userDoc._id;
+    const phone = userDoc.phone;
+
+    const userLoanDocs = await Loan.find({
+        $or: [
+            { lender: uid },
+            { borrower: uid },
+            ...(phone ? [{ borrowerPhone: phone }] : [])
+        ]
+    }).select('_id').lean();
+    const loanIds = userLoanDocs.map(l => l._id);
+
+    const [
+        loansRes,
+        txRes,
+        ledgerRes,
+        intentsRes,
+        chitsRes,
+        chitSubsRes,
+        creditScoreRes,
+        notifRes,
+        outboxRes,
+        mpinRes,
+        deviceTokenRes,
+        sessionRes,
+        secRes,
+        otpRes,
+        userRes
+    ] = await Promise.all([
+        Loan.deleteMany({ _id: { $in: loanIds } }),
+        Transaction.deleteMany({
+            $or: [
+                { actorId: uid },
+                ...(loanIds.length > 0 ? [{ loanId: { $in: loanIds } }] : [])
+            ]
+        }),
+        LedgerEntry.deleteMany({
+            $or: [
+                { account: uid },
+                { account: `USER_${uid}` },
+                ...(loanIds.length > 0 ? [{ referenceId: { $in: loanIds } }] : [])
+            ]
+        }),
+        TransactionIntent.deleteMany({
+            $or: [
+                { actorId: uid },
+                ...(loanIds.length > 0 ? [{ loanId: { $in: loanIds } }] : [])
+            ]
+        }).catch(() => ({ deletedCount: 0 })),
+        ChitFund.deleteMany({ owner: uid }),
+        ChitSubscription.deleteMany({ user: mongoId }).catch(() => ({ deletedCount: 0 })),
+        CreditScore.deleteMany({ user: uid }),
+        Notification.deleteMany({ user: uid }).catch(() => ({ deletedCount: 0 })),
+        NotificationOutbox.deleteMany({ recipientId: uid }).catch(() => ({ deletedCount: 0 })),
+        MPinCredential.deleteMany({ userId: mongoId }).catch(() => ({ deletedCount: 0 })),
+        DeviceToken.deleteMany({ userId: mongoId }).catch(() => ({ deletedCount: 0 })),
+        Session.deleteMany({ userId: mongoId }).catch(() => ({ deletedCount: 0 })),
+        SecurityEvent.deleteMany({
+            $or: [{ actorId: uid }, { userId: mongoId }]
+        }).catch(() => ({ deletedCount: 0 })),
+        phone ? Otp.deleteMany({ phone }).catch(() => ({ deletedCount: 0 })) : Promise.resolve({ deletedCount: 0 }),
+        User.deleteOne({ _id: mongoId })
+    ]);
+
+    // Also remove from Firebase Auth if requested and configured
+    if (options.removeFirebaseAuth !== false && userDoc.firebaseUid) {
+        try {
+            const firebaseAdmin = require('firebase-admin');
+            if (firebaseAdmin.apps && firebaseAdmin.apps.length > 0) {
+                await firebaseAdmin.auth().deleteUser(userDoc.firebaseUid);
+            }
+        } catch {
+            // Ignore if Firebase UID does not exist
+        }
+    }
+
+    return {
+        users: userRes.deletedCount || 0,
+        loans: loansRes.deletedCount || 0,
+        transactions: txRes.deletedCount || 0,
+        ledgerEntries: ledgerRes.deletedCount || 0,
+        transactionIntents: intentsRes.deletedCount || 0,
+        chitFunds: chitsRes.deletedCount || 0,
+        chitSubscriptions: chitSubsRes.deletedCount || 0,
+        creditScores: creditScoreRes.deletedCount || 0,
+        notifications: notifRes.deletedCount || 0,
+        notificationOutbox: outboxRes.deletedCount || 0,
+        mpinCredentials: mpinRes.deletedCount || 0,
+        deviceTokens: deviceTokenRes.deletedCount || 0,
+        sessions: sessionRes.deletedCount || 0,
+        securityEvents: secRes.deletedCount || 0,
+        otps: otpRes.deletedCount || 0
+    };
+}
+
+// @desc    Delete user data by query, user cascade, or full user-data purge (preserving schema, indexes & admins)
+// @route   POST /api/admin/data/purge
+exports.purgeUserData = async (req, res) => {
+    try {
+        const {
+            mode = 'QUERY_DELETE', // 'QUERY_DELETE' | 'USER_CASCADE' | 'PURGE_ALL_USER_DATA'
+            target = 'users',
+            reason = 'Operator requested user data deletion via Control Plane',
+            includeSecurityTelemetry = false
+        } = req.body;
+
+        if (!reason || String(reason).trim().length < 3) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide a brief audit reason for deleting user data.'
+            });
+        }
+
+        let summary = {};
+        let totalDeleted = 0;
+
+        if (mode === 'USER_CASCADE') {
+            const filter = buildSmartFilter('users', req.body);
+            if (Object.keys(filter).length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'USER_CASCADE requires userId, phone, email, or search filter.'
+                });
+            }
+
+            const matchedUsers = await User.find(filter).select('_id id phone email firebaseUid').lean();
+            if (matchedUsers.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'No matching users found for cascade deletion.'
+                });
+            }
+
+            const aggregateCounts = {};
+            for (const u of matchedUsers) {
+                const counts = await deleteSingleUserCascade(u);
+                for (const [k, v] of Object.entries(counts)) {
+                    aggregateCounts[k] = (aggregateCounts[k] || 0) + v;
+                    totalDeleted += v;
+                }
+            }
+            summary = aggregateCounts;
+        } else if (mode === 'PURGE_ALL_USER_DATA') {
+            // Delete all user & financial records while strictly preserving schemas, indexes, and Admin accounts
+            const targetsToPurge = [
+                ['users', User],
+                ['loans', Loan],
+                ['chitfunds', ChitFund],
+                ['chitsubscriptions', ChitSubscription],
+                ['transactions', Transaction],
+                ['ledgerentries', LedgerEntry],
+                ['transactionintents', TransactionIntent],
+                ['creditscores', CreditScore],
+                ['notifications', Notification],
+                ['notificationoutboxes', NotificationOutbox],
+                ['mpincredentials', MPinCredential],
+                ['devicetokens', DeviceToken],
+                ['sessions', Session],
+                ['otps', Otp],
+                ['reconciliationincidents', ReconciliationIncident]
+            ];
+
+            if (includeSecurityTelemetry) {
+                targetsToPurge.push(['securityevents', SecurityEvent]);
+            }
+
+            const results = await Promise.all(
+                targetsToPurge.map(async ([key, model]) => {
+                    const resDel = await model.deleteMany({}).catch(() => ({ deletedCount: 0 }));
+                    return [key, resDel.deletedCount || 0];
+                })
+            );
+
+            for (const [key, count] of results) {
+                summary[key] = count;
+                totalDeleted += count;
+            }
+        } else {
+            // mode === 'QUERY_DELETE'
+            const targetKey = String(target).toLowerCase().trim();
+            const cfg = MANAGED_COLLECTIONS[targetKey];
+            if (!cfg) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Unknown target collection: ${targetKey}`
+                });
+            }
+            if (cfg.protected) {
+                return res.status(403).json({
+                    success: false,
+                    message: `Collection '${targetKey}' is protected (Control Plane configuration/operators cannot be purged).`
+                });
+            }
+
+            const filter = buildSmartFilter(targetKey, req.body);
+            const allowEmptyFilter = Boolean(req.body.allowEmptyFilter);
+            if (Object.keys(filter).length === 0 && !allowEmptyFilter) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Query filter is empty. Specify a filter (phone, email, userId, status, or query) or set allowEmptyFilter: true to clear the entire collection.'
+                });
+            }
+
+            if (targetKey === 'users' && req.body.cascade !== false) {
+                const matchedUsers = await User.find(filter).select('_id id phone email firebaseUid').lean();
+                const aggregateCounts = {};
+                for (const u of matchedUsers) {
+                    const counts = await deleteSingleUserCascade(u);
+                    for (const [k, v] of Object.entries(counts)) {
+                        aggregateCounts[k] = (aggregateCounts[k] || 0) + v;
+                        totalDeleted += v;
+                    }
+                }
+                summary = aggregateCounts;
+            } else {
+                const delResult = await cfg.model.deleteMany(filter);
+                summary[targetKey] = delResult.deletedCount || 0;
+                totalDeleted = delResult.deletedCount || 0;
+            }
+        }
+
+        // Flush Redis & In-Memory caches immediately so changes reflect with ZERO server reload
+        await flushAllCache();
+
+        if (req.admin) {
+            await logAdminAction(
+                req.admin._id,
+                `DATA_PURGE_${mode}`,
+                `${reason} (Deleted ${totalDeleted} records; schemas & indexes preserved)`,
+                'SUCCESS',
+                req,
+                'Database',
+                target
+            );
+        }
+
+        res.status(200).json({
+            success: true,
+            mode,
+            totalDeleted,
+            schemasAndIndexesPreserved: true,
+            cacheFlushed: true,
+            serverReloadRequired: false,
+            summary,
+            timestamp: new Date().toISOString(),
+            message: `Successfully deleted ${totalDeleted} document(s) across user collections without reloading the server. All schemas, indexes, and Admin accounts remain intact.`
+        });
+    } catch (err) {
+        sendError(res, err);
+    }
+};
+
+// @desc    Delete a single user and cascade all their data immediately
+// @route   DELETE /api/admin/users/:id & DELETE /api/admin/customers/:id
+exports.deleteUserAdmin = async (req, res) => {
+    try {
+        const paramId = req.params.id;
+        const reason = req.body?.reason || req.query?.reason || 'Admin deleted user data from Control Plane';
+        const query = mongoose.Types.ObjectId.isValid(paramId)
+            ? { $or: [{ id: paramId }, { _id: paramId }] }
+            : { id: paramId };
+
+        const user = await User.findOne(query).select('_id id phone email firstName lastName firebaseUid').lean();
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const deletedBreakdown = await deleteSingleUserCascade(user);
+        const totalDeleted = Object.values(deletedBreakdown).reduce((a, b) => a + b, 0);
+
+        await flushAllCache();
+
+        if (req.admin) {
+            await logAdminAction(
+                req.admin._id,
+                'USER_DATA_DELETED',
+                `${reason} (User: ${user.phone || user.email || user.id}, Total records removed: ${totalDeleted})`,
+                'SUCCESS',
+                req,
+                'User',
+                user.id || String(user._id)
+            );
+        }
+
+        res.status(200).json({
+            success: true,
+            userId: user.id || String(user._id),
+            totalDeleted,
+            deletedBreakdown,
+            schemasAndIndexesPreserved: true,
+            serverReloadRequired: false,
+            message: `User ${user.firstName || user.phone || user.id} and ${totalDeleted} associated records deleted immediately.`
         });
     } catch (err) {
         sendError(res, err);

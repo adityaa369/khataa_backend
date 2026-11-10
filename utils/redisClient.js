@@ -6,6 +6,7 @@
   cacheInvalidatePattern,
   connectRedisStrict,
   isRedisAvailable,
+  flushAllCache,
 } = require('../config/redis');
 
 module.exports = {
@@ -16,4 +17,5 @@ module.exports = {
   cacheInvalidatePattern,
   connectRedisStrict,
   isRedisAvailable,
+  flushAllCache,
 };

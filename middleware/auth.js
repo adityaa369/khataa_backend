@@ -39,6 +39,14 @@ const protect = async (req, res, next) => {
             });
         }
 
+        const store = require('../utils/asyncContext').asyncLocalStorage.getStore();
+        if (store) {
+            store.userId = req.user.id;
+            store.actorType = 'USER';
+            store.actorPhone = req.user.phone;
+            store.actorEmail = req.user.email;
+        }
+
         next();
     } catch (err) {
         if (err.name === 'TokenExpiredError') {

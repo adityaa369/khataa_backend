@@ -4,8 +4,17 @@ const { protectAdmin, requireRole, requireMFA } = require('../middleware/adminAu
 const {
     login,
     getDashboard,
+    getLatencyAndUserIssues,
+    getApiFailuresDashboard,
+    clearStaleTelemetry,
+    triggerKeepAlivePing,
+    getDatabaseCollections,
+    previewDataQuery,
+    purgeUserData,
+    deleteUserAdmin,
     getIncidents,
     updateIncident,
+    toggleKillSwitch,
     getFinancialOverview,
     getTransactions,
     getLoans,
@@ -31,6 +40,7 @@ router.get('/users/:id', getUserDetail);
 router.put('/users/:id/suspend', toggleSuspend);
 router.put('/users/:id/verify-email', verifyUserEmailAdmin);
 router.put('/users/:id/role', setAdminRole);
+router.delete('/users/:id', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), deleteUserAdmin);
 router.get('/loans', getLoans);
 router.get('/chit-funds', getChitFunds);
 
@@ -38,6 +48,17 @@ router.get('/chit-funds', getChitFunds);
 router.get('/dashboard', requireMFA, getDashboard);
 router.get('/incidents', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getIncidents);
 router.put('/incidents/:id/status', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN'), updateIncident);
+
+// ─── Observability Dashboards (Latency/User Issues & API Failures/Traces) ───
+router.get('/observability/latency-errors', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getLatencyAndUserIssues);
+router.get('/observability/api-failures', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getApiFailuresDashboard);
+router.post('/observability/clear-telemetry', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), clearStaleTelemetry);
+router.post('/observability/keep-alive/ping', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'READ_ONLY_ADMIN'), triggerKeepAlivePing);
+
+// ─── Live User Data Query & Purge Studio (Preserves Schema & Indexes) ───────
+router.get('/data/collections', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'READ_ONLY_ADMIN'), getDatabaseCollections);
+router.post('/data/query-preview', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), previewDataQuery);
+router.post('/data/purge', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), requireMFA, purgeUserData);
 
 // Financial Command Center & Explorer
 router.get('/financial/overview', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getFinancialOverview);
@@ -64,6 +85,7 @@ router.get('/customers/:id', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_AD
 router.put('/customers/:id/suspend', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN'), toggleSuspend);
 router.put('/customers/:id/verify-email', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN'), verifyUserEmailAdmin);
 router.post('/customers/:id/kyc/unmask', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN'), requireMFA, unmaskKYC);
+router.delete('/customers/:id', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), deleteUserAdmin);
 
 // Security Telemetry & Incident Investigation
 const { getSecurityOverview, getSecurityEvents, investigateSecurityEvents } = require('../controllers/adminSecurity');
@@ -88,12 +110,18 @@ const { getAdmins, getAuditLogs } = require('../controllers/adminSystem');
 router.get('/system/admins', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getAdmins);
 router.get('/system/audit', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getAuditLogs);
 
-// Financial Emergency Kill Switch
+// Financial Emergency Kill Switch (including /controls/kill-switch aliases)
 const { getKillSwitch, activateKillSwitch, deactivateKillSwitch, getHistory } = require('../controllers/adminKillSwitch');
 router.get('/kill-switch', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getKillSwitch);
 router.post('/kill-switch/activate', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), activateKillSwitch);
 router.post('/kill-switch/deactivate', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), deactivateKillSwitch);
+router.post('/kill-switch/toggle', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), toggleKillSwitch);
 router.get('/kill-switch/history', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getHistory);
+
+router.get('/controls/kill-switch', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getKillSwitch);
+router.post('/controls/kill-switch/activate', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), activateKillSwitch);
+router.post('/controls/kill-switch/deactivate', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), deactivateKillSwitch);
+router.get('/controls/kill-switch/history', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getHistory);
 
 // Test Lab, Adversarial Audit & Production Readiness Gates
 const { getTestLabStatus, runScenario, cleanupTestRun } = require('../controllers/adminTestLab');

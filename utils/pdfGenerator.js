@@ -1,10 +1,10 @@
-const PDFDocument = require('pdfkit');
+const crypto = require('crypto');
 const admin = require('firebase-admin');
-const { v4: uuidv4 } = require('uuid');
 
 async function generateAndUploadClosureCertificate(loan) {
     return new Promise((resolve, reject) => {
         try {
+            const PDFDocument = require('pdfkit');
             const doc = new PDFDocument({ margin: 50, size: 'A4' });
             const buffers = [];
             
@@ -17,7 +17,7 @@ async function generateAndUploadClosureCertificate(loan) {
                     // To handle default or custom buckets
                     const bucket = admin.storage().bucket(bucketName);
                     
-                    const filename = `certificates/closure_${loan._id}_${uuidv4()}.pdf`;
+                    const filename = `certificates/closure_${loan._id}_${crypto.randomUUID()}.pdf`;
                     const file = bucket.file(filename);
 
                     await file.save(pdfData, {

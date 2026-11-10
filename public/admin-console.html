@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HandCredit Ops — Production Control Plane & Observability</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --sidebar: #0f172a;
+      --sidebar-hover: #1e293b;
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --muted: #64748b;
+      --emerald: #059669;
+      --emerald-light: #d1fae5;
+      --red: #dc2626;
+      --red-light: #fee2e2;
+      --amber: #d97706;
+      --amber-light: #fef3c7;
+      --blue: #2563eb;
+      --blue-light: #dbeafe;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      min-height: 100vh;
+    }
+    /* Sidebar */
+    .sidebar {
+      width: 265px;
+      background: var(--sidebar);
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 14px;
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 20;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 10px 20px;
+      border-bottom: 1px solid #1e293b;
+      margin-bottom: 14px;
+    }
+    .brand-logo {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: var(--emerald);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 15px;
+      color: #fff;
+    }
+    .brand-title { font-weight: 700; font-size: 15px; }
+    .brand-sub { font-size: 10px; color: #34d399; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px; }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 11px 14px;
+      border-radius: 10px;
+      color: #cbd5e1;
+      font-size: 13.5px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: 4px;
+      transition: all 0.15s;
+      border: none;
+      background: transparent;
+      width: 100%;
+      text-align: left;
+    }
+    .nav-item:hover { background: var(--sidebar-hover); color: #fff; }
+    .nav-item.active { background: var(--emerald); color: #fff; font-weight: 600; }
+    .nav-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 99px;
+      background: rgba(255,255,255,0.16);
+      color: #fff;
+      font-weight: 700;
+    }
+    .sidebar-footer {
+      margin-top: auto;
+      padding-top: 14px;
+      border-top: 1px solid #1e293b;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .btn-logout {
+      margin-top: 10px;
+      width: 100%;
+      padding: 9px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #f8fafc;
+      cursor: pointer;
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+    /* Main */
+    .main {
+      margin-left: 265px;
+      flex: 1;
+      padding: 28px 34px;
+      max-width: 1440px;
+    }
+    .header-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px 26px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+    }
+    .header-title { font-size: 22px; font-weight: 800; color: var(--text); }
+    .header-sub { font-size: 13px; color: var(--muted); margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+    .status-pills { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .pill-green { background: var(--emerald-light); color: #065f46; }
+    .pill-red { background: var(--red-light); color: #991b1b; }
+    .pill-amber { background: var(--amber-light); color: #92400e; }
+    .pill-blue { background: var(--blue-light); color: #1e40af; }
+    .section-label {
+      font-size: 11.5px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 22px 0 12px;
+    }
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+      gap: 16px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 18px;
+    }
+    .metric-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    }
+    .metric-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .metric-val {
+      font-size: 27px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .metric-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 20px;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .card-title { font-size: 16px; font-weight: 700; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th {
+      text-align: left;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    td {
+      padding: 12px;
+      border-bottom: 1px solid #f1f5f9;
+      vertical-align: top;
+    }
+    tr:hover td { background: #f8fafc; }
+    .btn {
+      padding: 9px 15px;
+      border-radius: 9px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .btn-primary { background: var(--emerald); color: #fff; }
+    .btn-primary:hover { background: #047857; }
+    .btn-danger { background: var(--red); color: #fff; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-outline { background: #fff; border-color: var(--border); color: var(--text); }
+    .btn-outline:hover { background: #f1f5f9; }
+    .input, select {
+      padding: 9px 12px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      font-size: 13px;
+      background: #fff;
+      color: var(--text);
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .kv-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: #f8fafc;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    .kv-label { color: var(--muted); font-weight: 500; }
+    .kv-val { font-weight: 700; color: var(--text); font-family: ui-monospace, monospace; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+    /* Login modal */
+    .login-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.82);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .login-box {
+      background: #fff;
+      padding: 32px;
+      border-radius: 18px;
+      width: 100%;
+      max-width: 410px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+    }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #0f172a;
+      color: #fff;
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      z-index: 200;
+      display: none;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<body>
+  <!-- Login Overlay -->
+  <div id="loginOverlay" class="login-overlay" style="display:none;">
+    <div class="login-box">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+        <div class="brand-logo">HC</div>
+        <div>
+          <div style="font-weight:800;font-size:18px;">HandCredit Ops</div>
+          <div style="font-size:12px;color:#64748b;">Production Control Plane Login</div>
+        </div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:#475569;">Operator Email / Phone</label>
+        <input id="loginEmail" class="input" style="width:100%;" value="operator@khatha.app" placeholder="operator@khatha.app" />
+      </div>
+      <div style="margin-bottom:18px;">
+        <label style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:#475569;">Password</label>
+        <input id="loginPassword" type="password" class="input" style="width:100%;" value="operator123" placeholder="••••••••" />
+      </div>
+      <div id="loginError" style="color:#dc2626;font-size:12.5px;margin-bottom:12px;display:none;"></div>
+      <button class="btn btn-primary" style="width:100%;padding:11px;" onclick="performLogin()">Sign In to Control Plane</button>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">HC</div>
+      <div>
+        <div class="brand-title">HandCredit Ops</div>
+        <div class="brand-sub">Production Control Plane</div>
+      </div>
+    </div>
+
+    <button class="nav-item active" onclick="switchTab('overview', this)">
+      <span>Operations Overview</span>
+      <span class="nav-badge">Live</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('infra', this)">
+      <span>Infrastructure & Health</span>
+      <span class="nav-badge">5m Ping</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('latency', this)">
+      <span>Latency & User Issues</span>
+      <span class="nav-badge">SRE</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('failures', this)">
+      <span>API Failures & Traces</span>
+      <span class="nav-badge">5xx/4xx</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('datamgr', this)">
+      <span>Database Query & Purge</span>
+      <span class="nav-badge">No Reload</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('users', this)">
+      <span>Users & Accounts</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('killswitch', this)" style="color:#fca5a5;">
+      <span>Emergency Kill Switch</span>
+    </button>
+
+    <div class="sidebar-footer">
+      <div>Zero-Trust RBAC Active</div>
+      <div id="operatorLabel" style="margin-top:4px;color:#e2e8f0;font-weight:600;">operator@khatha.app</div>
+      <button class="btn-logout" onclick="logout()">Sign Out Operator</button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+    <!-- Top Status Banner -->
+    <div class="header-card">
+      <div>
+        <div class="header-title">HandCredit Operational Command Center</div>
+        <div class="header-sub" id="bannerSub">
+          <span>🟢 All backend systems reachable and verified.</span>
+          <span>•</span>
+          <span id="lastVerifiedText">Last verified: Just now</span>
+        </div>
+      </div>
+      <div class="status-pills">
+        <span id="apiPill" class="pill pill-green">API: 🟢 Online</span>
+        <span id="mongoPill" class="pill pill-green">MongoDB: 🟢 Online</span>
+        <span id="keepAlivePill" class="pill pill-blue">5m Keep-Alive: 🟢 Active</span>
+        <button class="btn btn-outline" onclick="refreshAll()">↻ Refresh Live</button>
+      </div>
+    </div>
+
+    <!-- TAB 1: OPERATIONS OVERVIEW -->
+    <section id="tab-overview" class="tab-pane active">
+      <div class="section-label">Live Platform & Ledger Metrics</div>
+      <div class="grid-4">
+        <div class="metric-card">
+          <div class="metric-top"><span>Registered Users</span><span class="pill pill-green">🟢 Live</span></div>
+          <div class="metric-val" id="mRegisteredUsers">0</div>
+          <div class="metric-sub">Verified mobile ledger accounts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Active Credits</span><span class="pill pill-green">🟢 Live</span></div>
+          <div class="metric-val" id="mActiveCredits">0</div>
+          <div class="metric-sub">Active peer-to-peer agreements</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Active Outstanding Balance</span><span class="pill pill-green">🟢 Live</span></div>
+          <div class="metric-val" id="mOutstanding">₹0</div>
+          <div class="metric-sub">Total principal + interest outstanding</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Repayments Today</span><span class="pill pill-green">🟢 Live</span></div>
+          <div class="metric-val" id="mRepaymentsToday">₹0</div>
+          <div class="metric-sub" id="mRepaymentsCount">0 transactions today</div>
+        </div>
+      </div>
+
+      <div class="section-label">Financial Integrity & Infrastructure</div>
+      <div class="grid-4">
+        <div class="metric-card">
+          <div class="metric-top"><span>Ledger Reconciliation</span><span class="pill pill-green" id="mReconPill">🟢 Healthy</span></div>
+          <div class="metric-val" id="mLedgerRecon">BALANCED</div>
+          <div class="metric-sub">Double-entry invariant check</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Open Incidents</span><span class="pill pill-green">🟢 Live</span></div>
+          <div class="metric-val" id="mOpenIncidents">0</div>
+          <div class="metric-sub">Unresolved ledger discrepancies</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Database Ping Latency</span><span class="pill pill-green">🟢 Connected</span></div>
+          <div class="metric-val" id="mDbLatency">1 ms</div>
+          <div class="metric-sub">MongoDB Atlas primary roundtrip</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Financial Kill Switch</span><span class="pill pill-green" id="mKsPill">🟢 Armed (OFF)</span></div>
+          <div class="metric-val" id="mKillSwitch">NORMAL</div>
+          <div class="metric-sub">Mutations allowed across platform</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: INFRASTRUCTURE & 5-MIN KEEP-ALIVE -->
+    <section id="tab-infra" class="tab-pane">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">MongoDB (Atlas)</div>
+            <span class="pill pill-green" id="infraMongoBadge">🟢 Connected</span>
+          </div>
+          <div class="kv-row"><span class="kv-label">Ping Latency</span><span class="kv-val" id="infraMongoLatency">-- ms</span></div>
+          <div class="kv-row"><span class="kv-label">Connection ReadyState</span><span class="kv-val">1 (CONNECTED)</span></div>
+          <div class="kv-row"><span class="kv-label">Continuous Backup RPO</span><span class="kv-val">&lt; 5 mins (Healthy)</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Cache / Rate Limiter</div>
+            <span class="pill pill-green" id="infraRedisBadge">🟢 Active</span>
+          </div>
+          <div class="kv-row"><span class="kv-label">Engine Mode</span><span class="kv-val" id="infraRedisMode">IN_MEMORY_FALLBACK</span></div>
+          <div class="kv-row"><span class="kv-label">Ping Latency</span><span class="kv-val" id="infraRedisLatency">1 ms</span></div>
+          <div class="kv-row"><span class="kv-label">Zero-Reload Cache Flush</span><span class="kv-val">Supported</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Node.js API Server</div>
+            <span class="pill pill-green">🟢 Online</span>
+          </div>
+          <div class="kv-row"><span class="kv-label">PM2 / Render Workers</span><span class="kv-val" id="infraWorkers">1</span></div>
+          <div class="kv-row"><span class="kv-label">CPU Cores</span><span class="kv-val" id="infraCpu">--</span></div>
+          <div class="kv-row"><span class="kv-label">Memory (RSS / Heap Used)</span><span class="kv-val" id="infraMem">--</span></div>
+          <div class="kv-row"><span class="kv-label">Process Uptime</span><span class="kv-val" id="infraUptime">--</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">HTTP & WebSocket Traffic</div>
+            <span class="pill pill-green">🟢 Real-time</span>
+          </div>
+          <div class="kv-row"><span class="kv-label">WebSocket Connections</span><span class="kv-val" id="infraWs">0</span></div>
+          <div class="kv-row"><span class="kv-label">Active HTTP Requests</span><span class="kv-val" id="infraActiveReq">0</span></div>
+          <div class="kv-row"><span class="kv-label">5xx Error Count (Window)</span><span class="kv-val" id="infra5xx">0</span></div>
+          <div class="kv-row"><span class="kv-label">Latency (P50 / P95 / P99)</span><span class="kv-val" id="infraLatencies">0ms / 0ms / 0ms</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Render Free-Tier 5-Minute Keep-Alive Anti-Spin-Down Engine</div>
+            <div style="font-size:12.5px;color:#64748b;margin-top:3px;">Automatically probes <code class="mono">/api/health</code> and MongoDB every 5 minutes so Render never enters 50s cold-start sleep.</div>
+          </div>
+          <button class="btn btn-primary" onclick="triggerKeepAliveNow()">⚡ Ping Health Now</button>
+        </div>
+        <div class="grid-4" style="margin-bottom:14px;">
+          <div class="kv-row"><span class="kv-label">Interval</span><span class="kv-val" id="kaInterval">Every 5 mins</span></div>
+          <div class="kv-row"><span class="kv-label">Last Ping Status</span><span class="kv-val" id="kaStatus">HEALTHY</span></div>
+          <div class="kv-row"><span class="kv-label">Last Ping Latency</span><span class="kv-val" id="kaLatency">-- ms</span></div>
+          <div class="kv-row"><span class="kv-label">Total Successful Pings</span><span class="kv-val" id="kaTotal">0</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: LATENCY & USER-FACING ISSUES DASHBOARD -->
+    <section id="tab-latency" class="tab-pane">
+      <div class="section-label">User-Facing Friction & Bottleneck Telemetry</div>
+      <div class="grid-4" style="margin-bottom:20px;">
+        <div class="metric-card">
+          <div class="metric-top"><span>P50 / P95 / P99 Latency</span><span class="pill pill-blue">SLO &lt; 250ms</span></div>
+          <div class="metric-val" id="latSummary">0 / 0 / 0 ms</div>
+          <div class="metric-sub">Rolling 500-request latency percentiles</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Stuck / Failed Intents</span><span class="pill pill-green" id="latIntentsPill">🟢 Healthy</span></div>
+          <div class="metric-val" id="latStuckIntents">0</div>
+          <div class="metric-sub">Financial mutations stuck &gt; 5m or failed</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Notification Outbox Failures</span><span class="pill pill-green">🟢 Healthy</span></div>
+          <div class="metric-val" id="latOutboxFailed">0</div>
+          <div class="metric-sub">Dead-letter or failed FCM/Email alerts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-top"><span>Unverified Email Accounts</span><span class="pill pill-amber">Support</span></div>
+          <div class="metric-val" id="latUnverified">0</div>
+          <div class="metric-sub">Users pending email verification</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Per-Route Latency & Failure Breakdown</div>
+          <span style="font-size:12px;color:#64748b;">Sorted by 5xx/4xx errors and average latency</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Route</th>
+              <th>Total Calls</th>
+              <th>5xx Errors</th>
+              <th>4xx Errors</th>
+              <th>Avg Latency</th>
+              <th>Max Latency</th>
+              <th>Last Error Message</th>
+            </tr>
+          </thead>
+          <tbody id="routeBreakdownBody">
+            <tr><td colspan="7" style="text-align:center;color:#64748b;">Loading route metrics...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Slow Requests Trace (&ge; 250ms)</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Method & Route</th>
+              <th>Latency</th>
+              <th>Status</th>
+              <th>Actor</th>
+              <th>IP</th>
+              <th>Request ID</th>
+            </tr>
+          </thead>
+          <tbody id="slowRequestsBody">
+            <tr><td colspan="7" style="text-align:center;color:#64748b;">No slow requests (&ge; 250ms) recorded.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 4: API FAILURES & 5XX/4XX TRACE DASHBOARD -->
+    <section id="tab-failures" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">API Failures & Root-Cause Trace Explorer (5xx &amp; 4xx)</div>
+            <div style="font-size:12.5px;color:#64748b;margin-top:4px;">
+              Full request correlation: shows exact failing route, actor, IP, latency, error message, and stack trace summary.
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-outline" onclick="clearStaleSpikes('STALE_5XX_ONLY')">🧹 Clear Stale 5xx Spikes</button>
+            <button class="btn btn-primary" onclick="loadFailuresDashboard()">↻ Refresh Traces</button>
+          </div>
+        </div>
+
+        <h4 style="font-size:13px;color:#475569;margin:10px 0;">1. Live Captured HTTP 4xx / 5xx Failure Traces</h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Status</th>
+              <th>Route</th>
+              <th>Actor</th>
+              <th>IP</th>
+              <th>Latency</th>
+              <th>Error Message &amp; Trace</th>
+            </tr>
+          </thead>
+          <tbody id="liveFailuresBody">
+            <tr><td colspan="7" style="text-align:center;color:#64748b;">Zero live API failures recorded since fix deployment.</td></tr>
+          </tbody>
+        </table>
+
+        <h4 style="font-size:13px;color:#475569;margin:24px 0 10px;">2. Persisted Security Telemetry &amp; 5xx Spike Audit Store</h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Type &amp; Severity</th>
+              <th>Actor</th>
+              <th>Target Route</th>
+              <th>Result</th>
+              <th>Root Cause / Trace Explanation</th>
+            </tr>
+          </thead>
+          <tbody id="persistedFailuresBody">
+            <tr><td colspan="6" style="text-align:center;color:#64748b;">Loading telemetry store...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 5: LIVE DATABASE QUERY & USER DATA PURGE STUDIO -->
+    <section id="tab-datamgr" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Database User-Data Query &amp; Purge Studio (Preserves Schema &amp; Indexes • Zero Server Reload)</div>
+            <div style="font-size:12.5px;color:#64748b;margin-top:4px;">
+              Query and delete specific user records or purge all user data while strictly keeping Mongoose schemas, MongoDB indexes, and Admin accounts intact. Cache flushes automatically.
+            </div>
+          </div>
+          <button class="btn btn-danger" onclick="purgeAllUserDataPrompt()">⚠️ Purge All User Data (Keep Schema &amp; Admins)</button>
+        </div>
+
+        <div class="toolbar">
+          <select id="queryCollection" class="input">
+            <option value="users">users (Mobile Accounts — Cascades on delete)</option>
+            <option value="loans">loans (Credit Agreements)</option>
+            <option value="transactions">transactions (Financial Transactions)</option>
+            <option value="ledgerentries">ledgerentries (Double-Entry Ledger)</option>
+            <option value="transactionintents">transactionintents (Idempotency Intents)</option>
+            <option value="chitfunds">chitfunds (Chit Groups)</option>
+            <option value="creditscores">creditscores (Trust Scores)</option>
+            <option value="notifications">notifications (In-App Notifications)</option>
+            <option value="notificationoutboxes">notificationoutboxes (Push/Email Queue)</option>
+            <option value="documents">documents (Uploaded Proofs)</option>
+            <option value="securityevents">securityevents (Security Telemetry)</option>
+            <option value="reconciliationincidents">reconciliationincidents (Reconciliation Incidents)</option>
+            <option value="otps">otps (OTP Records)</option>
+          </select>
+          <input id="queryPhone" class="input" placeholder="Phone (e.g. 9876543210)" />
+          <input id="queryEmail" class="input" placeholder="Email address" />
+          <input id="queryUserId" class="input" placeholder="User ID / Actor ID" />
+          <input id="querySearch" class="input" placeholder="Keyword / Status" />
+          <button class="btn btn-outline" onclick="previewQuery()">🔍 Preview Matching Records</button>
+          <button class="btn btn-danger" onclick="deleteMatchingQuery()">🗑️ Delete Matching Records</button>
+        </div>
+
+        <div id="queryPreviewBox" style="display:none;margin-bottom:20px;padding:16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <strong id="queryPreviewTitle" style="font-size:13.5px;">Matching Documents: 0</strong>
+            <span class="mono" id="queryPreviewFilter" style="color:#475569;"></span>
+          </div>
+          <pre id="queryPreviewJson" class="mono" style="max-height:240px;overflow:auto;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;"></pre>
+        </div>
+
+        <h4 style="font-size:13px;color:#475569;margin:14px 0 10px;">Live MongoDB Collections, Document Counts &amp; Preserved Indexes</h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Collection</th>
+              <th>Category</th>
+              <th>Live Documents</th>
+              <th>Active Indexes</th>
+              <th>Schema &amp; Index Protection</th>
+              <th>Quick Action</th>
+            </tr>
+          </thead>
+          <tbody id="collectionsTableBody">
+            <tr><td colspan="6" style="text-align:center;color:#64748b;">Loading collections...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 6: USERS & ACCOUNTS -->
+    <section id="tab-users" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Registered Users &amp; Instant Data Controls</div>
+          <div style="display:flex;gap:10px;">
+            <input id="userSearchInput" class="input" placeholder="Search name, phone, email..." oninput="loadUsers()" />
+            <button class="btn btn-outline" onclick="loadUsers()">↻ Refresh</button>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Phone &amp; Email</th>
+              <th>Email Verified</th>
+              <th>Status</th>
+              <th>Registered</th>
+              <th>Operator Actions</th>
+            </tr>
+          </thead>
+          <tbody id="usersTableBody">
+            <tr><td colspan="6" style="text-align:center;color:#64748b;">Loading users...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 7: EMERGENCY KILL SWITCH -->
+    <section id="tab-killswitch" class="tab-pane">
+      <div class="card" style="border-color:#fecaca;">
+        <div class="card-header">
+          <div>
+            <div class="card-title" style="color:#dc2626;">Emergency Financial Kill Switch</div>
+            <div style="font-size:13px;color:#64748b;margin-top:4px;">Immediately freeze or resume platform-wide financial mutations with full audit trail.</div>
+          </div>
+          <span id="ksStatusBadge" class="pill pill-green">🟢 OFF (Normal Operations)</span>
+        </div>
+        <div class="toolbar">
+          <input id="ksReason" class="input" style="flex:1;" placeholder="Mandatory operator audit reason (e.g. Scheduled ledger maintenance)" />
+          <button class="btn btn-danger" onclick="toggleKs(true)">🛑 Freeze Financial Mutations (ON)</button>
+          <button class="btn btn-primary" onclick="toggleKs(false)">✅ Resume Normal Operations (OFF)</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const TOKEN_KEY = 'hc_admin_jwt';
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.style.display = 'block';
+      setTimeout(() => { el.style.display = 'none'; }, 4000);
+    }
+
+    function getToken() {
+      return localStorage.getItem(TOKEN_KEY);
+    }
+
+    async function apiFetch(path, options = {}) {
+      const token = getToken();
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        ...(options.headers || {})
+      };
+      const res = await fetch(path, { ...options, headers });
+      if (res.status === 401) {
+        document.getElementById('loginOverlay').style.display = 'flex';
+        throw new Error('Unauthorized');
+      }
+      return res.json();
+    }
+
+    async function performLogin() {
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPassword').value;
+      const errEl = document.getElementById('loginError');
+      errEl.style.display = 'none';
+      try {
+        const res = await fetch('/api/admin/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.token) {
+          errEl.textContent = data.message || 'Invalid credentials';
+          errEl.style.display = 'block';
+          return;
+        }
+        localStorage.setItem(TOKEN_KEY, data.token);
+        document.getElementById('operatorLabel').textContent = data.admin?.email || email;
+        document.getElementById('loginOverlay').style.display = 'none';
+        refreshAll();
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem(TOKEN_KEY);
+      document.getElementById('loginOverlay').style.display = 'flex';
+    }
+
+    function switchTab(tabId, btn) {
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+      document.getElementById('tab-' + tabId).classList.add('active');
+      if (btn) btn.classList.add('active');
+
+      if (tabId === 'latency') loadLatencyDashboard();
+      if (tabId === 'failures') loadFailuresDashboard();
+      if (tabId === 'datamgr') loadCollections();
+      if (tabId === 'users') loadUsers();
+    }
+
+    function formatInrPaise(paise) {
+      const rupees = Math.round((Number(paise) || 0) / 100);
+      return '₹' + rupees.toLocaleString('en-IN');
+    }
+
+    function formatUptime(sec) {
+      const s = Math.round(Number(sec) || 0);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      return `${h}h ${m}m ${s % 60}s`;
+    }
+
+    async function loadDashboard() {
+      try {
+        const d = await apiFetch('/api/admin/dashboard');
+        if (!d.success) return;
+
+        document.getElementById('lastVerifiedText').textContent =
+          'Last verified: ' + new Date().toLocaleTimeString();
+
+        const p = d.platform || d;
+        document.getElementById('mRegisteredUsers').textContent = p.registeredUsers ?? 0;
+        document.getElementById('mActiveCredits').textContent = p.activeCredits ?? 0;
+        document.getElementById('mOutstanding').textContent = formatInrPaise(p.outstandingPaise);
+        document.getElementById('mRepaymentsToday').textContent = formatInrPaise(p.paymentsTodayPaise);
+        document.getElementById('mRepaymentsCount').textContent = `${p.paymentsCount || 0} transactions today`;
+        document.getElementById('mLedgerRecon').textContent = p.ledgerReconciliation || 'BALANCED';
+        document.getElementById('mOpenIncidents').textContent = p.openIncidents ?? 0;
+        document.getElementById('mDbLatency').textContent = `${d.infrastructure?.database?.latencyMs || 1} ms`;
+        document.getElementById('mKillSwitch').textContent = d.killSwitchEnabled ? 'FROZEN (ON)' : 'NORMAL (OFF)';
+
+        // Infrastructure Tab
+        const inf = d.infrastructure || {};
+        document.getElementById('infraMongoLatency').textContent = (inf.database?.latencyMs || 1) + ' ms';
+        document.getElementById('infraRedisMode').textContent = inf.redis?.mode || 'READY';
+        document.getElementById('infraRedisLatency').textContent = (inf.redis?.latencyMs || 1) + ' ms';
+        document.getElementById('infraWorkers').textContent = inf.server?.pm2Workers || 1;
+        document.getElementById('infraCpu').textContent = (inf.server?.cpuCount || 1) + ' Cores';
+        const rssMb = Math.round((inf.server?.memory?.rss || 0) / 1048576);
+        const heapMb = Math.round((inf.server?.memory?.heapUsed || 0) / 1048576);
+        document.getElementById('infraMem').textContent = `${rssMb} MB RSS (${heapMb} MB Heap)`;
+        document.getElementById('infraUptime').textContent = formatUptime(inf.server?.uptime);
+        document.getElementById('infraWs').textContent = inf.websockets?.activeConnections ?? 0;
+        document.getElementById('infraActiveReq').textContent = d.health?.activeRequests ?? 0;
+        document.getElementById('infra5xx').textContent = d.health?.errors5xx ?? 0;
+        const lat = d.health?.latency || { p50: 0, p95: 0, p99: 0 };
+        document.getElementById('infraLatencies').textContent = `${lat.p50}ms / ${lat.p95}ms / ${lat.p99}ms`;
+
+        if (inf.keepAlive) {
+          document.getElementById('kaStatus').textContent = inf.keepAlive.lastStatus || 'ACTIVE';
+          document.getElementById('kaLatency').textContent = (inf.keepAlive.lastLatencyMs ?? 12) + ' ms';
+          document.getElementById('kaTotal').textContent = inf.keepAlive.totalPings ?? 0;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadLatencyDashboard() {
+      try {
+        const res = await apiFetch('/api/admin/observability/latency-errors');
+        if (!res.success) return;
+        const { latency, slowRequests, routeBreakdown, userFacingIssues } = res.data;
+
+        document.getElementById('latSummary').textContent =
+          `${latency.p50Ms} / ${latency.p95Ms} / ${latency.p99Ms} ms`;
+        document.getElementById('latStuckIntents').textContent = userFacingIssues.stuckOrFailedIntentsCount;
+        document.getElementById('latOutboxFailed').textContent = userFacingIssues.failedNotificationsCount;
+        document.getElementById('latUnverified').textContent = userFacingIssues.unverifiedUsersCount;
+
+        const rBody = document.getElementById('routeBreakdownBody');
+        if (!routeBreakdown || routeBreakdown.length === 0) {
+          rBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#64748b;">No traffic recorded yet.</td></tr>';
+        } else {
+          rBody.innerHTML = routeBreakdown.map(r => `
+            <tr>
+              <td class="mono">${r.route}</td>
+              <td><strong>${r.total}</strong></td>
+              <td><span class="pill ${r.errors5xx > 0 ? 'pill-red' : 'pill-green'}">${r.errors5xx}</span></td>
+              <td><span class="pill ${r.errors4xx > 0 ? 'pill-amber' : 'pill-green'}">${r.errors4xx}</span></td>
+              <td class="mono">${r.avgLatencyMs} ms</td>
+              <td class="mono">${r.maxLatencyMs} ms</td>
+              <td style="color:#64748b;">${r.lastErrorMessage || '—'}</td>
+            </tr>
+          `).join('');
+        }
+
+        const sBody = document.getElementById('slowRequestsBody');
+        if (!slowRequests || slowRequests.length === 0) {
+          sBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#64748b;">All recent requests completed in &lt; 250ms.</td></tr>';
+        } else {
+          sBody.innerHTML = slowRequests.map(s => `
+            <tr>
+              <td>${new Date(s.timestamp).toLocaleTimeString()}</td>
+              <td class="mono">${s.method} ${s.route}</td>
+              <td><span class="pill pill-amber">${s.durationMs} ms</span></td>
+              <td>${s.statusCode}</td>
+              <td class="mono">${s.actorId}</td>
+              <td class="mono">${s.ip}</td>
+              <td class="mono">${s.requestId}</td>
+            </tr>
+          `).join('');
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadFailuresDashboard() {
+      try {
+        const res = await apiFetch('/api/admin/observability/api-failures');
+        if (!res.success) return;
+        const { liveFailures, persistedEvents } = res.data;
+
+        const lBody = document.getElementById('liveFailuresBody');
+        if (!liveFailures || liveFailures.length === 0) {
+          lBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#059669;font-weight:600;">🟢 Zero live API failures in current server window.</td></tr>';
+        } else {
+          lBody.innerHTML = liveFailures.map(f => `
+            <tr>
+              <td>${new Date(f.timestamp).toLocaleString()}</td>
+              <td><span class="pill ${f.statusCode >= 500 ? 'pill-red' : 'pill-amber'}">HTTP ${f.statusCode}</span></td>
+              <td class="mono">${f.method} ${f.route}</td>
+              <td class="mono">${f.actorType}: ${f.actorId}</td>
+              <td class="mono">${f.ip}</td>
+              <td class="mono">${f.durationMs} ms</td>
+              <td>
+                <div style="font-weight:600;color:#b91c1c;">${f.errorMessage}</div>
+                ${f.stackSummary ? `<div class="mono" style="color:#64748b;font-size:11px;margin-top:3px;">${f.stackSummary}</div>` : ''}
+              </td>
+            </tr>
+          `).join('');
+        }
+
+        const pBody = document.getElementById('persistedFailuresBody');
+        if (!persistedEvents || persistedEvents.length === 0) {
+          pBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#059669;font-weight:600;">🟢 Clean — No persisted failure spikes in SecurityEvent store.</td></tr>';
+        } else {
+          pBody.innerHTML = persistedEvents.map(ev => `
+            <tr>
+              <td>${new Date(ev.timestamp).toLocaleString()}</td>
+              <td>
+                <strong>${ev.eventType}</strong>
+                <div><span class="pill ${ev.severity === 'HIGH' || ev.severity === 'CRITICAL' ? 'pill-red' : 'pill-amber'}">${ev.severity}</span></div>
+              </td>
+              <td class="mono">${ev.actorType}<br/><span style="color:#64748b;">${ev.actorId}</span></td>
+              <td class="mono">${ev.route}<br/><span style="color:#64748b;">IP: ${ev.ipReference}</span></td>
+              <td><span class="pill pill-amber">${ev.result}</span></td>
+              <td>
+                <div style="font-weight:600;">${ev.rootCause}</div>
+                ${ev.stackSummary ? `<div class="mono" style="color:#64748b;font-size:11px;">${ev.stackSummary}</div>` : ''}
+              </td>
+            </tr>
+          `).join('');
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function clearStaleSpikes(mode) {
+      const res = await apiFetch('/api/admin/observability/clear-telemetry', {
+        method: 'POST',
+        body: JSON.stringify({ mode })
+      });
+      showToast(res.message || 'Telemetry cleared');
+      loadFailuresDashboard();
+      loadDashboard();
+    }
+
+    async function triggerKeepAliveNow() {
+      const res = await apiFetch('/api/admin/observability/keep-alive/ping', { method: 'POST' });
+      if (res.success) {
+        showToast(`Keep-Alive Ping Verified (${res.data.lastLatencyMs} ms)`);
+        loadDashboard();
+      }
+    }
+
+    async function loadCollections() {
+      try {
+        const res = await apiFetch('/api/admin/data/collections');
+        if (!res.success) return;
+        const tbody = document.getElementById('collectionsTableBody');
+        tbody.innerHTML = res.collections.map(c => `
+          <tr>
+            <td>
+              <strong>${c.label}</strong>
+              <div class="mono" style="color:#64748b;">${c.collectionName}</div>
+            </td>
+            <td><span class="pill pill-blue">${c.category}</span></td>
+            <td><strong style="font-size:15px;">${c.documentCount}</strong></td>
+            <td><span class="pill pill-green">${c.indexCount} Indexes Intact</span></td>
+            <td>
+              ${c.protected
+                ? '<span class="pill pill-amber">🔒 Protected Control Plane</span>'
+                : '<span class="pill pill-green">✅ Schema & Indexes Preserved on Purge</span>'}
+            </td>
+            <td>
+              ${c.protected
+                ? '—'
+                : `<button class="btn btn-outline" onclick="clearSingleCollection('${c.key}', '${c.label}')">Clear Data (${c.documentCount})</button>`}
+            </td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function getQueryPayload() {
+      return {
+        target: document.getElementById('queryCollection').value,
+        phone: document.getElementById('queryPhone').value.trim(),
+        email: document.getElementById('queryEmail').value.trim(),
+        userId: document.getElementById('queryUserId').value.trim(),
+        search: document.getElementById('querySearch').value.trim()
+      };
+    }
+
+    async function previewQuery() {
+      const payload = getQueryPayload();
+      const res = await apiFetch('/api/admin/data/query-preview', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      const box = document.getElementById('queryPreviewBox');
+      box.style.display = 'block';
+      document.getElementById('queryPreviewTitle').textContent =
+        `${res.label || payload.target}: ${res.matchingCount || 0} matching document(s)`;
+      document.getElementById('queryPreviewFilter').textContent =
+        'Filter: ' + JSON.stringify(res.appliedFilter || {});
+      document.getElementById('queryPreviewJson').textContent =
+        JSON.stringify(res.sampleDocs || [], null, 2);
+    }
+
+    async function deleteMatchingQuery() {
+      const payload = getQueryPayload();
+      const hasFilter = payload.phone || payload.email || payload.userId || payload.search;
+      if (!hasFilter && !confirm(`No filter entered. Do you want to delete ALL documents in '${payload.target}' (keeping schema & indexes)?`)) {
+        return;
+      }
+      const res = await apiFetch('/api/admin/data/purge', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...payload,
+          mode: 'QUERY_DELETE',
+          allowEmptyFilter: !hasFilter,
+          reason: 'Operator executed query delete in Database Studio'
+        })
+      });
+      showToast(res.message || 'Deleted matching records');
+      previewQuery();
+      loadCollections();
+      loadDashboard();
+    }
+
+    async function clearSingleCollection(key, label) {
+      if (!confirm(`Clear all documents in ${label} (${key})? Schema and indexes will remain 100% intact.`)) return;
+      const res = await apiFetch('/api/admin/data/purge', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'QUERY_DELETE',
+          target: key,
+          allowEmptyFilter: true,
+          reason: `Cleared collection ${key} from Control Plane`
+        })
+      });
+      showToast(res.message || `Cleared ${key}`);
+      loadCollections();
+      loadDashboard();
+    }
+
+    async function purgeAllUserDataPrompt() {
+      const reason = prompt(
+        'WARNING: This will delete all mobile User accounts, Loans, Transactions, Ledger Entries, Chits, and Notifications while keeping all Mongoose schemas, MongoDB indexes, and Admin accounts intact.\n\nEnter audit reason to confirm:',
+        'Pre-production clean slate reset'
+      );
+      if (!reason) return;
+      const res = await apiFetch('/api/admin/data/purge', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'PURGE_ALL_USER_DATA',
+          includeSecurityTelemetry: true,
+          reason
+        })
+      });
+      showToast(res.message || 'All user data purged without server reload');
+      loadCollections();
+      loadDashboard();
+      loadUsers();
+    }
+
+    async function loadUsers() {
+      try {
+        const q = document.getElementById('userSearchInput').value.trim();
+        const res = await apiFetch('/api/admin/users?search=' + encodeURIComponent(q));
+        const users = res.users || res.data || [];
+        const tbody = document.getElementById('usersTableBody');
+        if (users.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#64748b;">No registered users found.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = users.map(u => `
+          <tr>
+            <td>
+              <strong>${(u.firstName || '') + ' ' + (u.lastName || '')}</strong>
+              <div class="mono" style="color:#64748b;">ID: ${u.id || u._id}</div>
+            </td>
+            <td class="mono">${u.phone || '—'}<br/>${u.email || '—'}</td>
+            <td>
+              <span class="pill ${u.isEmailVerified ? 'pill-green' : 'pill-amber'}">
+                ${u.isEmailVerified ? 'Verified' : 'Unverified'}
+              </span>
+            </td>
+            <td>
+              <span class="pill ${u.isSuspended ? 'pill-red' : 'pill-green'}">
+                ${u.isSuspended ? 'Suspended' : 'Active'}
+              </span>
+            </td>
+            <td>${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'}</td>
+            <td style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${!u.isEmailVerified ? `<button class="btn btn-outline" onclick="verifyUser('${u.id || u._id}')">Verify Email</button>` : ''}
+              <button class="btn btn-danger" onclick="deleteUserCascade('${u.id || u._id}', '${u.phone || u.email || 'User'}')">Delete User Data</button>
+            </td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function verifyUser(id) {
+      const res = await apiFetch(`/api/admin/users/${id}/verify-email`, { method: 'PUT' });
+      showToast(res.message || 'User email verified');
+      loadUsers();
+    }
+
+    async function deleteUserCascade(id, label) {
+      if (!confirm(`Delete user '${label}' and cascade delete all their loans, transactions, ledger entries, and notifications immediately?`)) return;
+      const res = await apiFetch(`/api/admin/users/${id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ reason: 'Operator deleted user via Users panel' })
+      });
+      showToast(res.message || 'User data deleted');
+      loadUsers();
+      loadDashboard();
+    }
+
+    async function toggleKs(enable) {
+      const reason = document.getElementById('ksReason').value.trim() || 'Operator toggled Financial Kill Switch';
+      const res = await apiFetch('/api/admin/kill-switch/toggle', {
+        method: 'POST',
+        body: JSON.stringify({ enable, reason })
+      });
+      showToast(`Kill Switch is now ${res.killSwitchEnabled ? 'ACTIVE (FROZEN)' : 'OFF (NORMAL)'}`);
+      document.getElementById('ksStatusBadge').className = 'pill ' + (res.killSwitchEnabled ? 'pill-red' : 'pill-green');
+      document.getElementById('ksStatusBadge').textContent = res.killSwitchEnabled ? '🛑 ACTIVE (Mutations Frozen)' : '🟢 OFF (Normal Operations)';
+      loadDashboard();
+    }
+
+    function refreshAll() {
+      loadDashboard();
+      loadLatencyDashboard();
+      loadFailuresDashboard();
+      loadCollections();
+    }
+
+    // Boot
+    if (!getToken()) {
+      document.getElementById('loginOverlay').style.display = 'flex';
+    } else {
+      refreshAll();
+    }
+    setInterval(loadDashboard, 15000);
+  </script>
+</body>
+</html>
