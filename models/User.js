@@ -59,7 +59,18 @@ const UserSchema = new mongoose.Schema({
         state: String,
         pincode: String,
         referenceId: String,
+        verificationMode: String,
         photoBase64: { type: String, select: false }
+    },
+    pendingAadhaarSession: {
+        referenceId: { type: String, index: true, sparse: true },
+        aadhaarHash: String,
+        maskedAadhaar: String,
+        last4Digits: String,
+        mode: String,
+        authorizationUrl: String,
+        attempts: { type: Number, default: 0 },
+        expiresAt: Date
     },
     dob: String,
     gender: String,
