@@ -134,6 +134,7 @@ const chitFundRoutes = require('./routes/chitFunds');
 const documentRoutes = require('./routes/documents');
 const adminRoutes = require('./routes/admin');
 const intentRoutes = require('./routes/intents');
+const kycRoutes = require('./routes/kyc');
 const financialKillSwitch = require('./middleware/financialKillSwitch');
 
 app.use(financialKillSwitch);
@@ -147,6 +148,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/chitfunds', chitFundRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/intents', intentRoutes);
+app.use('/api/kyc', kycRoutes);
 
 // ─── Health Check ───────────────────────────────────────────────────────────
 app.get('/api/test', (req, res) => res.json({ success: true, message: 'Khaata API is Live' }));

@@ -9,10 +9,11 @@ const { getTraceContext } = require('../utils/asyncContext');
 
 exports.getCustomerOverview = async (req, res) => {
     try {
-        const [totalCustomers, suspendedCount, emailVerifiedCount, securityAlerts] = await Promise.all([
+        const [totalCustomers, suspendedCount, emailVerifiedCount, aadhaarVerifiedCount, securityAlerts] = await Promise.all([
             User.countDocuments(),
             User.countDocuments({ isSuspended: true }),
             User.countDocuments({ isEmailVerified: true }),
+            User.countDocuments({ isAadhaarVerified: true }),
             SecurityEvent.countDocuments({ severity: { $in: ['HIGH', 'CRITICAL'] } })
         ]);
 
@@ -26,6 +27,7 @@ exports.getCustomerOverview = async (req, res) => {
                 active,
                 suspendedCount,
                 emailVerifiedCount,
+                aadhaarVerifiedCount,
                 pendingKyc: pendingEmail,
                 activeSessions: active,
                 securityAlerts
@@ -50,7 +52,7 @@ exports.getCustomers = async (req, res) => {
         } : {};
 
         const users = await User.find(query)
-            .select('-password -pan -aadhar -emailVerificationToken')
+            .select('-password -pan -aadhar -aadhaarHash -aadhaarKycData.photoBase64 -emailVerificationToken')
             .sort({ createdAt: -1 })
             .limit(100)
             .lean();
@@ -84,8 +86,10 @@ exports.getCustomerDetail = async (req, res) => {
         ]);
 
         const maskedUser = user.toObject();
+        delete maskedUser.aadhaarHash;
+        if (maskedUser.aadhaarKycData) delete maskedUser.aadhaarKycData.photoBase64;
         if (maskedUser.pan) maskedUser.pan = 'XXXXXX' + maskedUser.pan.slice(-4);
-        if (maskedUser.aadhar) maskedUser.aadhar = 'XXXXXXXX' + maskedUser.aadhar.slice(-4);
+        if (maskedUser.aadhar) maskedUser.aadhar = maskedUser.aadhaarMasked || ('XXXXXXXX' + maskedUser.aadhar.slice(-4));
 
         const enrichedLoans = loans.map(l => ({
             ...l,
@@ -105,6 +109,7 @@ exports.getCustomerDetail = async (req, res) => {
                 timeline: [
                     { time: user.createdAt, event: 'Account Registered on HandCredit', status: 'SUCCESS' },
                     ...(user.isEmailVerified ? [{ time: user.updatedAt, event: 'Email Address Verified', status: 'SUCCESS' }] : []),
+                    ...(user.isAadhaarVerified ? [{ time: user.aadhaarVerifiedAt || user.updatedAt, event: `UIDAI Aadhaar eKYC Verified (${user.aadhaarMasked || 'XXXX'})`, status: 'SUCCESS' }] : []),
                     ...(user.isSuspended ? [{ time: user.updatedAt, event: 'Account Suspended by Operator', status: 'BLOCKED' }] : [])
                 ]
             }

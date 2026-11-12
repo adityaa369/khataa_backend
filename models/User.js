@@ -32,6 +32,35 @@ const UserSchema = new mongoose.Schema({
     },
     pan: String,
     aadhar: String,
+    isAadhaarVerified: {
+        type: Boolean,
+        default: false
+    },
+    aadhaarMasked: {
+        type: String,
+        required: false
+    },
+    aadhaarHash: {
+        type: String,
+        index: true,
+        sparse: true
+    },
+    aadhaarVerifiedAt: {
+        type: Date,
+        required: false
+    },
+    aadhaarKycData: {
+        fullName: String,
+        dob: String,
+        gender: String,
+        careOf: String,
+        fullAddress: String,
+        district: String,
+        state: String,
+        pincode: String,
+        referenceId: String,
+        photoBase64: { type: String, select: false }
+    },
     dob: String,
     gender: String,
     isVerified: {
