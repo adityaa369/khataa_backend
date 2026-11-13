@@ -352,7 +352,7 @@ async function initiateDigiLockerAadhaarSession(redirectUrl) {
             `${SANDBOX_BASE_URL}/kyc/digilocker/sessions/init`,
             {
                 '@entity': 'in.co.sandbox.kyc.digilocker.session.request',
-                flow: 'signin',
+                flow: 'signup',
                 redirect_url: redirectUrl || DEFAULT_CALLBACK_URL,
                 doc_types: ['aadhaar'],
                 options: {

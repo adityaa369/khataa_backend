@@ -73,7 +73,7 @@ exports.getCustomerDetail = async (req, res) => {
         const user = await User.findOne(query).select('-password -emailVerificationToken');
         if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-        const [loans, chits, creditScore] = await Promise.all([
+        const [loans, chits, creditScore, securityEvents] = await Promise.all([
             Loan.find({
                 $or: [
                     { lender: user.id },
@@ -82,7 +82,13 @@ exports.getCustomerDetail = async (req, res) => {
                 ]
             }).sort({ createdAt: -1 }).limit(50).lean(),
             ChitSubscription.find({ user: user._id }).populate('chitFund', 'name status').lean().catch(() => []),
-            CreditScore.findOne({ user: user.id }).lean()
+            CreditScore.findOne({ user: user.id }).lean(),
+            SecurityEvent.find({
+                $or: [
+                    { userId: user.id },
+                    { userId: user._id.toString() }
+                ]
+            }).sort({ createdAt: -1 }).limit(25).lean().catch(() => [])
         ]);
 
         const maskedUser = user.toObject();
@@ -99,6 +105,12 @@ exports.getCustomerDetail = async (req, res) => {
             totalPayablePaise: typeof l.totalPayablePaise === 'number' ? l.totalPayablePaise : Math.round((l.totalPayable || l.amount || 0) * 100)
         }));
 
+        const securityTimeline = (securityEvents || []).map(ev => ({
+            time: ev.createdAt,
+            event: `${ev.eventType || 'SECURITY_EVENT'}: ${ev.description || ev.action || 'Recorded'}`,
+            status: ev.severity === 'HIGH' || ev.severity === 'CRITICAL' ? 'BLOCKED' : 'SUCCESS'
+        }));
+
         res.status(200).json({
             success: true,
             data: {
@@ -109,8 +121,9 @@ exports.getCustomerDetail = async (req, res) => {
                 timeline: [
                     { time: user.createdAt, event: 'Account Registered on HandCredit', status: 'SUCCESS' },
                     ...(user.isEmailVerified ? [{ time: user.updatedAt, event: 'Email Address Verified', status: 'SUCCESS' }] : []),
-                    ...(user.isAadhaarVerified ? [{ time: user.aadhaarVerifiedAt || user.updatedAt, event: `UIDAI Aadhaar eKYC Verified (${user.aadhaarMasked || 'XXXX'})`, status: 'SUCCESS' }] : []),
-                    ...(user.isSuspended ? [{ time: user.updatedAt, event: 'Account Suspended by Operator', status: 'BLOCKED' }] : [])
+                    ...(user.isAadhaarVerified ? [{ time: user.aadhaarVerifiedAt || user.updatedAt, event: `UIDAI Aadhaar eKYC Verified (${user.aadhaarMasked || 'XXXX'}) via ${user.aadhaarKycData?.provider || 'UIDAI'}`, status: 'SUCCESS' }] : []),
+                    ...(user.isSuspended ? [{ time: user.updatedAt, event: 'Account Suspended by Operator', status: 'BLOCKED' }] : []),
+                    ...securityTimeline
                 ]
             }
         });
@@ -155,6 +168,50 @@ exports.unmaskKYC = async (req, res) => {
                 pan: user.pan || 'Not collected (v1.0 Policy)',
                 aadhar: user.aadhar || 'Not collected (v1.0 Policy)'
             }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+};
+
+exports.resetAadhaarKycAdmin = async (req, res) => {
+    try {
+        const paramId = req.params.id;
+        const query = mongoose.Types.ObjectId.isValid(paramId)
+            ? { $or: [{ id: paramId }, { _id: paramId }] }
+            : { id: paramId };
+
+        const user = await User.findOne(query);
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+        await User.findByIdAndUpdate(user._id, {
+            $set: {
+                isAadhaarVerified: false,
+                aadhaarMasked: '',
+                aadhaarLast4: '',
+                aadhaarVerifiedAt: null
+            },
+            $unset: {
+                aadhaarHash: 1,
+                aadhaarKycData: 1
+            }
+        });
+
+        const { requestId } = getTraceContext();
+        await AdminAuditLog.create({
+            adminId: req.admin._id,
+            action: 'AADHAAR_KYC_RESET',
+            reason: req.body?.reason || 'Admin initiated Aadhaar KYC reset',
+            status: 'SUCCESS',
+            ipAddress: req.ip,
+            requestId,
+            resourceType: 'User',
+            resourceId: user.id || user._id.toString()
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'User Aadhaar eKYC status has been reset.'
         });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Internal Server Error' });

@@ -78,12 +78,13 @@ router.get('/chits', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'R
 router.get('/chits/:id', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY_ADMIN'), getChitDetail);
 
 // Customer 360 & Account Controls
-const { getCustomerOverview, getCustomers, getCustomerDetail, unmaskKYC } = require('../controllers/adminCustomers');
+const { getCustomerOverview, getCustomers, getCustomerDetail, unmaskKYC, resetAadhaarKycAdmin } = require('../controllers/adminCustomers');
 router.get('/customers/overview', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getCustomerOverview);
 router.get('/customers', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getCustomers);
 router.get('/customers/:id', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'FINANCE_ADMIN', 'SUPPORT_ADMIN', 'READ_ONLY_ADMIN'), getCustomerDetail);
 router.put('/customers/:id/suspend', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN'), toggleSuspend);
 router.put('/customers/:id/verify-email', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN'), verifyUserEmailAdmin);
+router.put('/customers/:id/reset-aadhaar', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN'), resetAadhaarKycAdmin);
 router.post('/customers/:id/kyc/unmask', requireRole('SUPER_ADMIN', 'OPS_ADMIN', 'SUPPORT_ADMIN'), requireMFA, unmaskKYC);
 router.delete('/customers/:id', requireRole('SUPER_ADMIN', 'OPS_ADMIN'), deleteUserAdmin);
 

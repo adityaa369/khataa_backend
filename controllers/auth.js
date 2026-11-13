@@ -181,7 +181,7 @@ exports.verifyOtp = async (req, res) => {
         let updates = {};
         updates.firebaseUid = result.uid;
         if (registrationDetails) {
-            if (registrationDetails.dob !== undefined) {
+            if (registrationDetails.dob !== undefined && String(registrationDetails.dob).trim() !== '') {
                 const dobCheck = validateAdultDob(registrationDetails.dob);
                 if (!dobCheck.valid) {
                     return res.status(400).json({
@@ -540,7 +540,7 @@ exports.verifyOtpMsg91 = async (req, res) => {
         let updates = {};
         updates.firebaseUid = 'mock_uid_' + phoneStr;
         if (registrationDetails) {
-            if (registrationDetails.dob !== undefined) {
+            if (registrationDetails.dob !== undefined && String(registrationDetails.dob).trim() !== '') {
                 const dobCheck = validateAdultDob(registrationDetails.dob);
                 if (!dobCheck.valid) {
                     return res.status(400).json({
@@ -816,7 +816,7 @@ exports.verifyOtpMsg91 = async (req, res) => {
         let updates = {};
         updates.firebaseUid = 'mock_uid_' + phoneStr;
         if (registrationDetails) {
-            if (registrationDetails.dob !== undefined) {
+            if (registrationDetails.dob !== undefined && String(registrationDetails.dob).trim() !== '') {
                 const dobCheck = validateAdultDob(registrationDetails.dob);
                 if (!dobCheck.valid) {
                     return res.status(400).json({
