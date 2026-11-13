@@ -43,18 +43,26 @@ async function applyVerifiedKycToUser(user, session, kycData, reqIp = 'N/A', req
     };
     user.pendingAadhaarSession = undefined;
 
-    // Enrich empty profile fields from verified Aadhaar record
-    if (!user.address && kycData.fullAddress) {
+    // Sync official UIDAI Aadhaar demographic details & photo directly to user profile
+    if (kycData.fullName && String(kycData.fullName).trim().isNotEmpty) {
+        const nameParts = String(kycData.fullName).trim().split(/\s+/);
+        user.firstName = nameParts[0];
+        user.lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+    }
+    if (kycData.fullAddress) {
         user.address = kycData.fullAddress;
     }
-    if (!user.city && kycData.district) {
+    if (kycData.district) {
         user.city = kycData.district;
     }
-    if (!user.gender && kycData.gender) {
+    if (kycData.gender) {
         user.gender = kycData.gender;
     }
-    if (!user.dob && kycData.dob) {
+    if (kycData.dob) {
         user.dob = kycData.dob;
+    }
+    if (kycData.photoBase64 && (!user.profileImageId || user.profileImageId.startsWith('data:image'))) {
+        user.profileImageId = kycData.photoBase64;
     }
 
     await user.save();
@@ -87,7 +95,7 @@ async function applyVerifiedKycToUser(user, session, kycData, reqIp = 'N/A', req
 exports.getAadhaarKycStatus = async (req, res) => {
     try {
         const user = await User.findOne({ id: req.user.id })
-            .select('id firstName lastName isVerified isAadhaarVerified aadhaarMasked aadhaarVerifiedAt aadhaarKycData pendingAadhaarSession')
+            .select('id firstName lastName isVerified isAadhaarVerified aadhaarMasked aadhaarVerifiedAt aadhaarKycData aadhaarKycData.photoBase64 profileImageId pendingAadhaarSession')
             .lean();
 
         if (!user) {
@@ -436,12 +444,8 @@ exports.verifyAadhaarOtp = async (req, res) => {
         const safeKycData = user.aadhaarKycData.toObject
             ? user.aadhaarKycData.toObject()
             : { ...user.aadhaarKycData };
-        delete safeKycData.photoBase64;
 
         const userObj = user.toObject();
-        if (userObj.aadhaarKycData) {
-            delete userObj.aadhaarKycData.photoBase64;
-        }
 
         return res.status(200).json({
             success: true,
@@ -538,6 +542,9 @@ exports.resetAadhaarKyc = async (req, res) => {
         user.aadhaarVerifiedAt = undefined;
         user.aadhaarKycData = undefined;
         user.pendingAadhaarSession = undefined;
+        if (user.profileImageId && String(user.profileImageId).startsWith('data:image')) {
+            user.profileImageId = undefined;
+        }
         await user.save();
 
         await clearUserKycRateLimits(targetUserId, oldHash);
