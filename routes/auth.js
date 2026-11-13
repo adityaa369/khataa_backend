@@ -19,6 +19,7 @@ router.post('/send-otp', authLimiter, (req, res) => {
     res.status(200).json({ success: true, message: 'OTP flow shifted to Firebase client SDK.' });
 });
 
+router.post('/check-availability', authLimiter, authController.checkAvailability);
 router.post('/verify-otp', authLimiter, authController.verifyOtp);
 router.post('/login-password', authLimiter, authController.loginPassword);
 router.post('/reset-password', protect, authController.resetPassword);

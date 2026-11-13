@@ -439,6 +439,38 @@ exports.verifyAadhaarOtp = async (req, res) => {
         await cacheInvalidate(sessionKey);
 
         const kycData = verifyResult.kycData;
+
+        // Secondary duplicate-Aadhaar check at verification stage (1 Aadhaar = 1 HandCredit Account)
+        if (session.mode !== 'TEST_OTP') {
+            const dupConditions = [];
+            if (session.aadhaarHash) {
+                dupConditions.push({ aadhaarHash: session.aadhaarHash });
+            }
+            if (kycData.maskedAadhaar && kycData.dob && kycData.fullName) {
+                dupConditions.push({
+                    aadhaarMasked: kycData.maskedAadhaar,
+                    'aadhaarKycData.dob': kycData.dob,
+                    'aadhaarKycData.fullName': kycData.fullName
+                });
+            }
+            if (dupConditions.length > 0) {
+                const duplicateOwner = await User.findOne({
+                    id: { $ne: req.user.id },
+                    isAadhaarVerified: true,
+                    $or: dupConditions
+                })
+                    .select('id')
+                    .lean();
+
+                if (duplicateOwner) {
+                    return res.status(409).json({
+                        success: false,
+                        message: 'This Aadhaar identity is already verified and linked to another HandCredit account.'
+                    });
+                }
+            }
+        }
+
         const finalMasked = await applyVerifiedKycToUser(user, session, kycData, req.ip || 'N/A', req.originalUrl);
 
         const safeKycData = user.aadhaarKycData.toObject

@@ -59,6 +59,61 @@ function validateAdultDob(dobStr) {
     return { valid: true, age };
 }
 
+function escapeRegex(str) {
+    return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// @desc    Pre-check if mobile number or email address is already registered before sending signup OTP
+// @route   POST /api/auth/check-availability
+// @access  Public
+exports.checkAvailability = async (req, res) => {
+    try {
+        const { phone, email } = req.body || {};
+
+        if (phone) {
+            let phoneStr = String(phone).replace(/\D/g, '');
+            if (phoneStr.startsWith('91') && phoneStr.length > 10) {
+                phoneStr = phoneStr.substring(2);
+            }
+            const existingPhone = await User.findOne({ phone: phoneStr }).select('id firstName password').lean();
+            if (existingPhone && existingPhone.firstName) {
+                return res.status(409).json({
+                    success: false,
+                    field: 'phone',
+                    message: 'An account with this mobile number already exists. Please sign in instead.'
+                });
+            }
+        }
+
+        if (email && String(email).trim()) {
+            const cleanEmail = String(email).trim().toLowerCase();
+            const existingEmail = await User.findOne({
+                email: { $regex: new RegExp(`^${escapeRegex(cleanEmail)}$`, 'i') }
+            })
+                .select('id phone')
+                .lean();
+
+            if (existingEmail) {
+                return res.status(409).json({
+                    success: false,
+                    field: 'email',
+                    message: 'This email address is already registered with another HandCredit account.'
+                });
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            available: true
+        });
+    } catch (err) {
+        return res.status(500).json({
+            success: false,
+            message: 'Unable to check account availability right now.'
+        });
+    }
+};
+
 // @desc    Verify Firebase ID Token and login/register
 // @route   POST /api/auth/verify-otp
 // @access  Public
@@ -107,8 +162,9 @@ exports.verifyOtp = async (req, res) => {
                 });
             }
             if (registrationDetails.email) {
+                const cleanEmail = registrationDetails.email.toLowerCase().trim();
                 const emailOwner = await User.findOne({
-                    email: registrationDetails.email.toLowerCase().trim(),
+                    email: { $regex: new RegExp(`^${escapeRegex(cleanEmail)}$`, 'i') },
                     phone: { $ne: phoneStr }
                 });
                 if (emailOwner) {
@@ -457,7 +513,29 @@ exports.verifyOtpMsg91 = async (req, res) => {
         await Otp.deleteOne({ phone: phoneStr });
 
         let isNewUser = false;
-        let user = await User.findOne({ phone: phoneStr });
+        let user = await User.findOne({ phone: phoneStr }).select('+password');
+
+        if (registrationDetails) {
+            if (user && user.firstName && user.password) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'An account with this mobile number already exists. Please sign in.'
+                });
+            }
+            if (registrationDetails.email) {
+                const cleanEmail = String(registrationDetails.email).toLowerCase().trim();
+                const emailOwner = await User.findOne({
+                    email: { $regex: new RegExp(`^${escapeRegex(cleanEmail)}$`, 'i') },
+                    phone: { $ne: phoneStr }
+                });
+                if (emailOwner) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'This email address is already registered with another account.'
+                    });
+                }
+            }
+        }
 
         let updates = {};
         updates.firebaseUid = 'mock_uid_' + phoneStr;
@@ -711,7 +789,29 @@ exports.verifyOtpMsg91 = async (req, res) => {
         await Otp.deleteOne({ phone: phoneStr });
 
         let isNewUser = false;
-        let user = await User.findOne({ phone: phoneStr });
+        let user = await User.findOne({ phone: phoneStr }).select('+password');
+
+        if (registrationDetails) {
+            if (user && user.firstName && user.password) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'An account with this mobile number already exists. Please sign in.'
+                });
+            }
+            if (registrationDetails.email) {
+                const cleanEmail = String(registrationDetails.email).toLowerCase().trim();
+                const emailOwner = await User.findOne({
+                    email: { $regex: new RegExp(`^${escapeRegex(cleanEmail)}$`, 'i') },
+                    phone: { $ne: phoneStr }
+                });
+                if (emailOwner) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'This email address is already registered with another account.'
+                    });
+                }
+            }
+        }
 
         let updates = {};
         updates.firebaseUid = 'mock_uid_' + phoneStr;
