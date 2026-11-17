@@ -213,7 +213,40 @@ exports.sendAadhaarOtp = async (req, res) => {
             }
         }
 
-        // 3. Multi-layer rate limit & cooldown check
+        // 3. Reuse active pending session for the same Aadhaar if still valid (saves paid API init calls!)
+        if (
+            cleanAadhaar !== SANDBOX_TEST_AADHAAR &&
+            user.pendingAadhaarSession &&
+            user.pendingAadhaarSession.aadhaarHash === aadhaarHash &&
+            user.pendingAadhaarSession.referenceId &&
+            user.pendingAadhaarSession.authorizationUrl &&
+            user.pendingAadhaarSession.expiresAt &&
+            new Date(user.pendingAadhaarSession.expiresAt) > new Date()
+        ) {
+            const existingSession = user.pendingAadhaarSession;
+            const responseData = {
+                referenceId: existingSession.referenceId,
+                mode: existingSession.mode || 'DIGILOCKER',
+                authorizationUrl: existingSession.authorizationUrl,
+                maskedAadhaar,
+                aadhaarMasked: maskedAadhaar,
+                reusedSession: true,
+                expiresInSeconds: Math.max(
+                    60,
+                    Math.floor((new Date(existingSession.expiresAt).getTime() - Date.now()) / 1000)
+                ),
+                cooldownSeconds: RESEND_COOLDOWN_SEC,
+                remainingAttempts: MAX_VERIFY_ATTEMPTS
+            };
+            return res.status(200).json({
+                success: true,
+                ...responseData,
+                data: responseData,
+                message: `Continuing your active UIDAI Aadhaar session for ${maskedAadhaar}.`
+            });
+        }
+
+        // 4. Multi-layer rate limit & cooldown check
         const rateCheck = await checkOtpGenerationAllowed(req.user.id, aadhaarHash);
         if (!rateCheck.allowed) {
             return res.status(rateCheck.status || 429).json({
@@ -223,14 +256,14 @@ exports.sendAadhaarOtp = async (req, res) => {
             });
         }
 
-        // Build callback URL with userId so callback auto-completes verification
+        // Build callback URL with userId so callback auto-completes ONLY this user's session
         const baseHost =
             process.env.RENDER_EXTERNAL_URL ||
             process.env.BACKEND_PUBLIC_URL ||
             'https://khataa-backend.onrender.com';
-        const redirectUrl = `${baseHost.replace(/\/$/, '')}/api/kyc/aadhaar/callback`;
+        const redirectUrl = `${baseHost.replace(/\/$/, '')}/api/kyc/aadhaar/callback?userId=${encodeURIComponent(req.user.id)}`;
 
-        // 4. Call Quicko (Sandbox.co.in) Live Aadhaar Session endpoint
+        // 5. Call Quicko (Sandbox.co.in) Live Aadhaar Session endpoint (Strictly 1 call)
         const otpResult = await requestQuickoAadhaarOtp(cleanAadhaar, { redirectUrl });
         if (!otpResult.success) {
             return res.status(otpResult.status || 400).json({
@@ -506,12 +539,20 @@ exports.verifyAadhaarOtp = async (req, res) => {
 // @access  Public
 exports.handleDigiLockerCallback = async (req, res) => {
     try {
-        // Attempt to auto-complete any active pending DigiLocker session that just succeeded
-        const recentUsers = await User.find({
+        // Attempt to auto-complete ONLY the specific user's active session (or most recent 1 session)
+        const targetUserId = req.query.userId ? String(req.query.userId).trim() : null;
+        const filter = {
             isAadhaarVerified: { $ne: true },
             'pendingAadhaarSession.referenceId': { $exists: true },
             'pendingAadhaarSession.expiresAt': { $gt: new Date() }
-        }).limit(5);
+        };
+        if (targetUserId) {
+            filter.id = targetUserId;
+        }
+
+        const recentUsers = await User.find(filter)
+            .sort({ updatedAt: -1 })
+            .limit(1);
 
         for (const u of recentUsers) {
             const sess = u.pendingAadhaarSession;

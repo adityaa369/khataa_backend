@@ -376,7 +376,7 @@ async function initiateDigiLockerAadhaarSession(redirectUrl) {
     };
 
     let response = await callInit(accessToken);
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
         accessToken = await getSandboxAccessToken(true);
         response = await callInit(accessToken);
     }
@@ -425,7 +425,33 @@ async function requestQuickoAadhaarOtp(cleanAadhaar12, options = {}) {
 
 // ─── Step 2: Verify OTP / Poll DigiLocker Session & Fetch Signed UIDAI XML ──
 
+const inFlightSessionChecks = new Map();
+
 async function verifyDigiLockerAadhaarSession(sessionId, expectedLast4 = '') {
+    const cleanSessionId = String(sessionId || '').trim();
+    if (!cleanSessionId) {
+        return {
+            success: false,
+            pending: false,
+            status: 400,
+            message: 'Missing DigiLocker session ID.'
+        };
+    }
+
+    // Prevent parallel duplicate hits to Quicko for the same session
+    if (inFlightSessionChecks.has(cleanSessionId)) {
+        return inFlightSessionChecks.get(cleanSessionId);
+    }
+
+    const executionPromise = _executeVerifyDigiLockerSession(cleanSessionId, expectedLast4).finally(() => {
+        inFlightSessionChecks.delete(cleanSessionId);
+    });
+
+    inFlightSessionChecks.set(cleanSessionId, executionPromise);
+    return executionPromise;
+}
+
+async function _executeVerifyDigiLockerSession(sessionId, expectedLast4 = '') {
     const { apiKey } = getSandboxCredentials();
     let accessToken = await getSandboxAccessToken(false);
 
@@ -436,12 +462,12 @@ async function verifyDigiLockerAadhaarSession(sessionId, expectedLast4 = '') {
         'Accept': 'application/json'
     });
 
-    // 1. Check Session Status
+    // 1. Check Session Status (Single request; do not retry on 403 wallet restriction)
     let statusRes = await axios.get(
         `${SANDBOX_BASE_URL}/kyc/digilocker/sessions/${encodeURIComponent(sessionId)}/status`,
         { headers: headersFor(accessToken), timeout: 20000, validateStatus: () => true }
     );
-    if (statusRes.status === 401 || statusRes.status === 403) {
+    if (statusRes.status === 401) {
         accessToken = await getSandboxAccessToken(true);
         statusRes = await axios.get(
             `${SANDBOX_BASE_URL}/kyc/digilocker/sessions/${encodeURIComponent(sessionId)}/status`,
@@ -449,19 +475,29 @@ async function verifyDigiLockerAadhaarSession(sessionId, expectedLast4 = '') {
         );
     }
 
-    const sessionData = statusRes.data?.data || {};
-    const sessionStatus = String(sessionData.status || '').toLowerCase();
-
-    if (sessionStatus === 'created' || sessionStatus === 'pending' || sessionStatus === 'initiated') {
+    if (statusRes.status === 403 || statusRes.status === 402) {
+        const errMsg =
+            statusRes.data?.message ||
+            'Quicko Sandbox API wallet credits are exhausted or restricted. Please add funds in the Sandbox console or use Sandbox Test Aadhaar (999941057058 / OTP 123456).';
         return {
             success: false,
-            pending: true,
-            status: 202,
-            sessionStatus,
-            message:
-                'Waiting for Aadhaar OTP completion on the UIDAI / MeriPehchaan window. Please enter the 6-digit OTP sent to your Aadhaar-registered mobile number and tap Allow.'
+            pending: false,
+            status: 403,
+            message: errMsg
         };
     }
+
+    if (statusRes.status !== 200) {
+        return {
+            success: false,
+            pending: false,
+            status: 400,
+            message: statusRes.data?.message || 'Unable to check UIDAI DigiLocker session status.'
+        };
+    }
+
+    const sessionData = statusRes.data?.data || {};
+    const sessionStatus = String(sessionData.status || '').toLowerCase();
 
     if (sessionStatus === 'failed' || sessionStatus === 'expired' || sessionStatus === 'rejected') {
         return {
@@ -473,7 +509,20 @@ async function verifyDigiLockerAadhaarSession(sessionId, expectedLast4 = '') {
         };
     }
 
-    // 2. Fetch Aadhaar Document from Quicko DigiLocker
+    // Strictly require sessionStatus === 'succeeded' (or 'completed') BEFORE calling /documents/aadhaar!
+    // This completely eliminates 403 errors on /documents/aadhaar while the user is still entering OTP.
+    if (sessionStatus !== 'succeeded' && sessionStatus !== 'completed') {
+        return {
+            success: false,
+            pending: true,
+            status: 202,
+            sessionStatus: sessionStatus || 'created',
+            message:
+                'Waiting for Aadhaar OTP completion on the UIDAI / MeriPehchaan window. Please enter the 6-digit OTP sent to your Aadhaar-registered mobile number and tap Allow.'
+        };
+    }
+
+    // 2. Fetch Aadhaar Document from Quicko DigiLocker ONLY ONCE after sessionStatus === 'succeeded'
     const docRes = await axios.get(
         `${SANDBOX_BASE_URL}/kyc/digilocker/sessions/${encodeURIComponent(sessionId)}/documents/aadhaar`,
         { headers: headersFor(accessToken), timeout: 25000, validateStatus: () => true }
