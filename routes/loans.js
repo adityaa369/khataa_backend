@@ -42,6 +42,7 @@ router.patch('/:id/progress', updateProgress);
 router.get('/:id/repayment-timeline', require('../controllers/loans').getRepaymentTimeline);
 router.get('/:id/interest-schedule', require('../controllers/loans').getInterestSchedule);
 router.get('/:id/noc', require('../controllers/loans').downloadNoc);
+router.post('/:id/payment-nudge', require('../controllers/loans').sendPaymentNudge);
 
 // Custom Payments
 router.post('/:id/record-payment', validatePaymentAmount, recordPayment);

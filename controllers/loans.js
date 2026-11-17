@@ -226,6 +226,8 @@ exports.createLoan = async (req, res) => {
         }
 
         const effectiveInterestRate = loanType === 'interest_credit' ? Number(interestRate || 0) : 0;
+        const parsedStartDate = req.body.start_date ? new Date(req.body.start_date) : new Date();
+        const parsedDueDate = req.body.due_date ? new Date(req.body.due_date) : undefined;
 
         const loan = await Loan.create({
             lender: req.user.id,
@@ -239,6 +241,8 @@ exports.createLoan = async (req, res) => {
             interestRate: effectiveInterestRate,
             durationMonths,
             durationType,
+            startDate: !isNaN(parsedStartDate.getTime()) ? parsedStartDate : new Date(),
+            endDate: parsedDueDate && !isNaN(parsedDueDate.getTime()) ? parsedDueDate : undefined,
             loanType,
             status: 'pending_approval',
             transaction_id: effectiveTransactionId,
@@ -373,8 +377,8 @@ exports.getGivenLoans = async (req, res) => {
 exports.getLoanById = async (req, res) => {
     try {
         const loan = await Loan.findById(req.params.id)
-            .populate({ path: 'lender', model: 'User', localField: 'lender', foreignField: 'id', select: 'firstName lastName phone' })
-            .populate({ path: 'borrower', model: 'User', localField: 'borrower', foreignField: 'id', select: 'firstName lastName phone' });
+            .populate({ path: 'lender', model: 'User', localField: 'lender', foreignField: 'id', select: 'id firstName lastName phone' })
+            .populate({ path: 'borrower', model: 'User', localField: 'borrower', foreignField: 'id', select: 'id firstName lastName phone' });
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
         
         const isLender = loan.lender && (loan.lender.id === req.user.id || loan.lender === req.user.id);
@@ -411,7 +415,20 @@ exports.getLoanById = async (req, res) => {
             if (modified) await loan.save();
         }
 
-        res.status(200).json({ success: true, loan });
+        const loanObj = loan.toObject ? loan.toObject() : { ...loan };
+        if (loanObj.lender && typeof loanObj.lender === 'object') {
+            loanObj.lenderName = `${loanObj.lender.firstName || ''} ${loanObj.lender.lastName || ''}`.trim() || 'Lender';
+            loanObj.lenderPhone = loanObj.lender.phone || '';
+        }
+        if (loanObj.borrower && typeof loanObj.borrower === 'object') {
+            const bName = `${loanObj.borrower.firstName || ''} ${loanObj.borrower.lastName || ''}`.trim();
+            if (bName) loanObj.borrowerName = bName;
+            if (!loanObj.borrowerPhone && loanObj.borrower.phone) {
+                loanObj.borrowerPhone = loanObj.borrower.phone;
+            }
+        }
+
+        res.status(200).json({ success: true, loan: loanSerializer(loanObj) });
     } catch (err) {
         console.error('[Loans] getLoanById Error:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -558,7 +575,9 @@ exports.verifyLoan = async (req, res) => {
         }
 
         loan.status = 'active';
-        loan.startDate = Date.now();
+        if (!loan.startDate) {
+            loan.startDate = Date.now();
+        }
         loan.activatedAt = Date.now();
         loan.borrower = req.user.id; 
 
@@ -568,14 +587,18 @@ exports.verifyLoan = async (req, res) => {
         // Calculate Dates
         if (loan.durationMonths && loan.durationMonths > 0) {
             const startDate = new Date(loan.startDate);
-            const endDate = new Date(startDate);
+            const endDate = loan.endDate ? new Date(loan.endDate) : new Date(startDate);
             const nextDueDate = new Date(startDate);
             
             if (loan.durationType === 'Days') {
-                endDate.setDate(endDate.getDate() + loan.durationMonths);
+                if (!loan.endDate) {
+                    endDate.setDate(endDate.getDate() + loan.durationMonths);
+                }
                 nextDueDate.setDate(nextDueDate.getDate() + Math.min(30, loan.durationMonths));
             } else {
-                endDate.setMonth(endDate.getMonth() + loan.durationMonths);
+                if (!loan.endDate) {
+                    endDate.setMonth(endDate.getMonth() + loan.durationMonths);
+                }
                 nextDueDate.setMonth(nextDueDate.getMonth() + 1);
             }
             loan.endDate = endDate;
@@ -1610,5 +1633,87 @@ exports.downloadNoc = async (req, res) => {
         if (!res.headersSent) {
             res.status(500).json({ success: false, message: 'Failed to generate settlement certificate: ' + err.message });
         }
+    }
+};
+
+// @desc    Send instant payment reminder / nudge between Lender and Borrower
+// @route   POST /api/loans/:id/payment-nudge
+// @access  Private (Lender or Borrower)
+exports.sendPaymentNudge = async (req, res) => {
+    try {
+        const loan = await Loan.findById(req.params.id);
+        if (!loan) {
+            return res.status(404).json({ success: false, message: 'Credit record not found' });
+        }
+
+        const userPhone = (req.user.phone || '').toString().replace(/^\+?91/, '');
+        const isLender = loan.lender === req.user.id;
+        const isBorrower = loan.borrower === req.user.id || (userPhone && loan.borrowerPhone === userPhone);
+
+        if (!isLender && !isBorrower) {
+            return res.status(403).json({ success: false, message: 'Not authorized for this credit record' });
+        }
+
+        if (loan.status === 'closed' || loan.status === 'completed') {
+            return res.status(400).json({ success: false, message: 'This credit is already settled.' });
+        }
+
+        const EventDispatcher = require('../utils/EventDispatcher');
+        const senderName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Your counterparty';
+        const amountRupees = ((loan.principalOutstandingPaise || loan.amountPaise || (loan.amount * 100) || 0) / 100).toLocaleString('en-IN');
+
+        if (isLender) {
+            const borrowerUser = loan.borrower
+                ? await User.findOne({ id: loan.borrower })
+                : await User.findOne({ phone: loan.borrowerPhone });
+            if (!borrowerUser) {
+                return res.status(404).json({ success: false, message: 'Borrower account not found' });
+            }
+
+            await EventDispatcher.dispatch({
+                eventType: 'PAYMENT_NUDGE',
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                recipientUserId: borrowerUser._id,
+                payload: {
+                    title: 'Payment Reminder from Lender',
+                    body: `${senderName} sent a polite reminder regarding your active credit balance of ₹${amountRupees}.`,
+                    type: 'LOAN_REMINDER',
+                    loanId: loan._id.toString()
+                }
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: `Payment reminder sent to ${loan.borrowerName || 'the borrower'}.`
+            });
+        } else {
+            // Borrower notifying Lender that payment was made offline so Lender can record it
+            const lenderUser = await User.findOne({ id: loan.lender });
+            if (!lenderUser) {
+                return res.status(404).json({ success: false, message: 'Lender account not found' });
+            }
+
+            await EventDispatcher.dispatch({
+                eventType: 'PAYMENT_NUDGE',
+                aggregateType: 'LOAN',
+                aggregateId: loan._id.toString(),
+                recipientUserId: lenderUser._id,
+                payload: {
+                    title: 'Borrower Payment Update Request',
+                    body: `${senderName} requested you to record a payment on the ₹${amountRupees} credit in HandCredit.`,
+                    type: 'LOAN_REMINDER',
+                    loanId: loan._id.toString()
+                }
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: 'Reminder sent to the lender to record your payment.'
+            });
+        }
+    } catch (err) {
+        console.error('[Loans] sendPaymentNudge Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Failed to send reminder' });
     }
 };
