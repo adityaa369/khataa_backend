@@ -200,6 +200,9 @@ exports.verifyOtp = async (req, res) => {
                 const salt = await bcrypt.genSalt(10);
                 updates.password = await bcrypt.hash(registrationDetails.password, salt);
             }
+            if (!wasRegistered) {
+                updates.isEmailVerified = false;
+            }
         }
 
         // Atomically find or create the user to prevent duplicate insertions
@@ -217,16 +220,18 @@ exports.verifyOtp = async (req, res) => {
         );
 
         // SYNC EMAIL TO FIREBASE (Registration & Repair)
+        // Always reset emailVerified: false in Firebase on new registration so old Firebase UIDs don't auto-verify!
         if (user.email && result.uid) {
             try {
                 const admin = require('firebase-admin');
                 const fbUser = await admin.auth().getUser(result.uid);
-                if (fbUser.email !== user.email) {
+                const expectedVerified = Boolean(wasRegistered && user.isEmailVerified);
+                if (fbUser.email !== user.email || fbUser.emailVerified !== expectedVerified) {
                     await admin.auth().updateUser(result.uid, {
                         email: user.email,
-                        emailVerified: user.isEmailVerified || false
+                        emailVerified: expectedVerified
                     });
-                    console.log(`[Auth] Synchronized email for user ${user.id} to Firebase Auth`);
+                    console.log(`[Auth] Synchronized email & verification state (${expectedVerified}) for user ${user.id} to Firebase Auth`);
                 }
             } catch (err) {
                 console.error(`[Auth] Failed to sync email to Firebase for user ${user.id}: ${err.message}`);
