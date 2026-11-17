@@ -340,6 +340,34 @@ exports.getMe = async (req, res) => {
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
+
+        // Enforce official UIDAI Aadhaar name & demographics if verified
+        if (user.isAadhaarVerified && user.aadhaarKycData) {
+            let modified = false;
+            const officialFullName = String(user.aadhaarKycData.fullName || '').trim();
+            if (officialFullName.length > 0) {
+                const parts = officialFullName.split(/\s+/);
+                const expectedFirst = parts[0];
+                const expectedLast = parts.length > 1 ? parts.slice(1).join(' ') : '';
+                if (user.firstName !== expectedFirst || user.lastName !== expectedLast) {
+                    user.firstName = expectedFirst;
+                    user.lastName = expectedLast;
+                    modified = true;
+                }
+            }
+            if (user.aadhaarKycData.dob && user.dob !== user.aadhaarKycData.dob) {
+                user.dob = user.aadhaarKycData.dob;
+                modified = true;
+            }
+            if (user.aadhaarKycData.gender && user.gender !== user.aadhaarKycData.gender) {
+                user.gender = user.aadhaarKycData.gender;
+                modified = true;
+            }
+            if (modified) {
+                await user.save();
+            }
+        }
+
         res.status(200).json({
             success: true,
             user
@@ -1404,10 +1432,20 @@ exports.deleteAccount = async (req, res) => {
             });
         }
 
-        // Remove credentials, score, and security events
+        // Remove credentials, score, notifications, loans, and security events
+        const Notification = require('../models/Notification');
+        const { clearUserKycRateLimits } = require('../services/AadhaarKycService');
+        const { cacheInvalidate } = require('../config/redis');
+
         await MPinCredential.deleteMany({ userId: req.user._id });
         await CreditScore.deleteMany({ user: req.user.id });
         await SecurityEvent.deleteMany({ userId: req.user._id });
+        await Notification.deleteMany({ user: req.user._id }).catch(() => {});
+        await Loan.deleteMany({
+            $or: [{ lender: req.user.id }, { borrower: req.user.id }]
+        }).catch(() => {});
+        await clearUserKycRateLimits(req.user.id, req.user.aadhaarHash).catch(() => {});
+        await cacheInvalidate(`loans:given:${req.user.id}`, `loans:taken:${req.user.id}`).catch(() => {});
 
         // Delete Firebase Auth user if linked
         if (req.user.firebaseUid && !req.user.firebaseUid.startsWith('mock_uid_')) {

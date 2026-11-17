@@ -65,7 +65,9 @@ exports.updateProfile = async (req, res) => {
                 });
             }
         }
-        const allowedFields = ['firstName', 'lastName', 'email', 'pan', 'aadhar', 'dob', 'gender', 'city', 'address'];
+        const allowedFields = req.user && req.user.isAadhaarVerified
+            ? ['email', 'city', 'address'] // Lock firstName, lastName, dob, gender to official UIDAI Aadhaar ID once verified
+            : ['firstName', 'lastName', 'email', 'pan', 'aadhar', 'dob', 'gender', 'city', 'address'];
         const updates = {};
         allowedFields.forEach((f) => {
             if (req.body[f] !== undefined) updates[f] = req.body[f];

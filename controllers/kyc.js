@@ -44,8 +44,9 @@ async function applyVerifiedKycToUser(user, session, kycData, reqIp = 'N/A', req
     user.pendingAadhaarSession = undefined;
 
     // Sync official UIDAI Aadhaar demographic details & photo directly to user profile
-    if (kycData.fullName && String(kycData.fullName).trim().isNotEmpty) {
-        const nameParts = String(kycData.fullName).trim().split(/\s+/);
+    const verifiedFullName = String(kycData.fullName || '').trim();
+    if (verifiedFullName.length > 0) {
+        const nameParts = verifiedFullName.split(/\s+/);
         user.firstName = nameParts[0];
         user.lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
     }
@@ -66,6 +67,16 @@ async function applyVerifiedKycToUser(user, session, kycData, reqIp = 'N/A', req
     }
 
     await user.save();
+
+    // Also sync official UIDAI name onto any active/completed credit agreements where this user is borrower
+    if (verifiedFullName.length > 0) {
+        const Loan = require('../models/Loan');
+        Loan.updateMany(
+            { $or: [{ borrower: user.id }, { borrowerPhone: user.phone }] },
+            { $set: { borrowerName: verifiedFullName } }
+        ).catch(() => {});
+    }
+
     updateCreditScore(user.id).catch(() => {});
 
     await SecurityEvent.create({
@@ -95,11 +106,27 @@ async function applyVerifiedKycToUser(user, session, kycData, reqIp = 'N/A', req
 exports.getAadhaarKycStatus = async (req, res) => {
     try {
         const user = await User.findOne({ id: req.user.id })
-            .select('id firstName lastName isVerified isAadhaarVerified aadhaarMasked aadhaarVerifiedAt aadhaarKycData aadhaarKycData.photoBase64 profileImageId pendingAadhaarSession')
-            .lean();
+            .select(
+                'id firstName lastName phone dob gender city address isVerified isAadhaarVerified aadhaarMasked aadhaarVerifiedAt profileImageId pendingAadhaarSession ' +
+                'aadhaarKycData.fullName aadhaarKycData.dob aadhaarKycData.gender aadhaarKycData.careOf aadhaarKycData.fullAddress aadhaarKycData.district aadhaarKycData.state aadhaarKycData.pincode aadhaarKycData.referenceId aadhaarKycData.verificationMode aadhaarKycData.photoBase64'
+            );
 
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        // Self-heal user profile name/dob/gender if user verified previously when .isNotEmpty skipped firstName/lastName
+        const kycRaw = user.aadhaarKycData || {};
+        const officialFullName = String(kycRaw.fullName || '').trim();
+        if (user.isAadhaarVerified && officialFullName.length > 0) {
+            const parts = officialFullName.split(/\s+/);
+            const expectedFirst = parts[0];
+            const expectedLast = parts.length > 1 ? parts.slice(1).join(' ') : '';
+            if (user.firstName !== expectedFirst || user.lastName !== expectedLast) {
+                user.firstName = expectedFirst;
+                user.lastName = expectedLast;
+                await user.save();
+            }
         }
 
         const lockKey = `kyc:lockout:${req.user.id}`;
@@ -109,7 +136,22 @@ exports.getAadhaarKycStatus = async (req, res) => {
             ? Math.ceil((Number(lockedUntil) - Date.now()) / 1000)
             : 0;
 
-        const kycDetails = user.aadhaarKycData || null;
+        const fallbackFullName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
+        const kycDetails = user.isAadhaarVerified
+            ? {
+                  fullName: officialFullName || fallbackFullName,
+                  dob: kycRaw.dob || user.dob || '',
+                  gender: kycRaw.gender || user.gender || '',
+                  careOf: kycRaw.careOf || '',
+                  fullAddress: kycRaw.fullAddress || user.address || '',
+                  district: kycRaw.district || user.city || '',
+                  state: kycRaw.state || '',
+                  pincode: kycRaw.pincode || '',
+                  referenceId: kycRaw.referenceId || '',
+                  verificationMode: kycRaw.verificationMode || 'DIGILOCKER',
+                  photoBase64: kycRaw.photoBase64 || (user.profileImageId && String(user.profileImageId).startsWith('data:image') ? user.profileImageId : null)
+              }
+            : null;
         const payload = {
             isAadhaarVerified: Boolean(user.isAadhaarVerified),
             aadhaarMasked: user.aadhaarMasked || null,

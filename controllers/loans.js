@@ -342,22 +342,6 @@ exports.getGivenLoans = async (req, res) => {
             loansMapped.push(loanSerializer(loanObj));
         }
         
-        // --- CHIT FUNDS AGGREGATION ---
-        const ChitFund = require('../models/ChitFund');
-        const ownedChits = await ChitFund.find({ owner: req.user.id });
-
-        for (const chit of ownedChits) {
-            loansMapped.push(chitFundSerializer(chit, {
-                status: chit.status === 'completed' ? 'completed' : 'active',
-                progress: (chit.completedMonths || 0) / (chit.totalMonths || 1),
-                startDate: chit.startDate || chit.createdAt,
-                lenderName: `${req.user.firstName || ''} ${req.user.lastName || ''}`,
-                borrowerName: `${chit.currentSubscribersCount} Member(s)`,
-                borrowerPhone: 'N/A',
-                createdAt: chit.createdAt
-            }));
-        }
-        
         loansMapped.sort((a, b) => {
             const aDate = new Date(a.createdAt || a.startDate || 0);
             const bDate = new Date(b.createdAt || b.startDate || 0);
@@ -491,30 +475,6 @@ exports.getTakenLoans = async (req, res) => {
                 loanObj.lenderPhone = '';
             }
             loansWithLender.push(loanSerializer(loanObj));
-        }
-
-        // --- CHIT SUBSCRIPTIONS AGGREGATION ---
-        const ChitSubscription = require('../models/ChitSubscription');
-        const ChitFund = require('../models/ChitFund');
-
-        const activeChits = await ChitSubscription.find({ user: req.user.id }).populate('chitFund');
-        for (const sub of activeChits) {
-            if (!sub.chitFund) continue;
-            const chitFund = sub.chitFund;
-            
-            const groupOwner = await User.findOne({ id: chitFund.owner });
-            const ownerName = groupOwner ? `${groupOwner.firstName || ''} ${groupOwner.lastName || ''}`.trim() : 'Unknown Network';
-
-            loansWithLender.push(chitFundSerializer(chitFund, {
-                _id: sub._id,
-                status: sub.status === 'completed' ? 'completed' : 'active',
-                progress: (sub.installmentsPaid || 0) / (chitFund.totalMonths || 1),
-                startDate: chitFund.startDate || chitFund.createdAt,
-                lenderName: ownerName,
-                borrowerName: `${req.user.firstName || ''} ${req.user.lastName || ''}`,
-                borrowerPhone: req.user.phone,
-                createdAt: sub.createdAt
-            }));
         }
 
         // Sort combined list by created date descending
