@@ -313,30 +313,7 @@ exports.getGivenLoans = async (req, res) => {
         const User = require('../models/User'); // Import User model
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         for (const loan of loans) {
-            // Retroactive fix for fixed-interest loans without upfront interest
-            if (['interest_credit', 'business_credit'].includes(loan.loanType)) {
-                let modified = false;
-                
-                // Deduplicate upfront interest if race condition caused multiple inserts
-                if (loan.transactions) {
-                    const upfrontTxns = loan.transactions.filter(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
-                    if (upfrontTxns.length > 1) {
-                        const firstUpfrontId = upfrontTxns[0]._id;
-                        loan.transactions = loan.transactions.filter(t => 
-                            !(t.type === 'interest_accrued' && t.note && t.note.includes('Upfront') && t._id.toString() !== firstUpfrontId.toString())
-                        );
-                        modified = true;
-                    }
-                }
-
-                const hasUpfront = loan.transactions && loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
-                if (!hasUpfront && loan.status !== 'pending_approval' && loan.status !== 'pending_otp' && loan.status !== 'rejected' && loan.principalOutstandingPaise > 0) {
-                    await FinancialLedgerService.accrueInterest(loan);
-                    modified = true;
-                }
-
-                if (modified) await loan.save();
-            }
+            await FinancialLedgerService.reconcileLoan(loan);
             
             const loanObj = loan.toObject ? loan.toObject() : loan;
             
@@ -385,31 +362,8 @@ exports.getLoanById = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Not authorized to view this loan' });
         }
 
-        // Retroactive fix for fixed-interest loans without upfront interest
-        if (['interest_credit', 'business_credit'].includes(loan.loanType)) {
-            let modified = false;
-            
-            // Deduplicate upfront interest if race condition caused multiple inserts
-            if (loan.transactions) {
-                const upfrontTxns = loan.transactions.filter(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
-                if (upfrontTxns.length > 1) {
-                    const firstUpfrontId = upfrontTxns[0]._id;
-                    loan.transactions = loan.transactions.filter(t => 
-                        !(t.type === 'interest_accrued' && t.note && t.note.includes('Upfront') && t._id.toString() !== firstUpfrontId.toString())
-                    );
-                    modified = true;
-                }
-            }
-
-            const hasUpfront = loan.transactions && loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
-            if (!hasUpfront && loan.status !== 'pending_approval' && loan.status !== 'pending_otp' && loan.status !== 'rejected' && loan.principalOutstandingPaise > 0) {
-                const FinancialLedgerService = require('../services/FinancialLedgerService');
-                await FinancialLedgerService.accrueInterest(loan);
-                modified = true;
-            }
-
-            if (modified) await loan.save();
-        }
+        const FinancialLedgerService = require('../services/FinancialLedgerService');
+        await FinancialLedgerService.reconcileLoan(loan);
 
         const loanObj = loan.toObject ? loan.toObject() : { ...loan };
         if (loanObj.lender && typeof loanObj.lender === 'object') {
@@ -452,30 +406,7 @@ exports.getTakenLoans = async (req, res) => {
         const loansWithLender = [];
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         for (const loan of loans) {
-            // Retroactive fix for fixed-interest loans without upfront interest
-            if (['interest_credit', 'business_credit'].includes(loan.loanType)) {
-                let modified = false;
-                
-                // Deduplicate upfront interest if race condition caused multiple inserts
-                if (loan.transactions) {
-                    const upfrontTxns = loan.transactions.filter(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
-                    if (upfrontTxns.length > 1) {
-                        const firstUpfrontId = upfrontTxns[0]._id;
-                        loan.transactions = loan.transactions.filter(t => 
-                            !(t.type === 'interest_accrued' && t.note && t.note.includes('Upfront') && t._id.toString() !== firstUpfrontId.toString())
-                        );
-                        modified = true;
-                    }
-                }
-
-                const hasUpfront = loan.transactions && loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
-                if (!hasUpfront && loan.status !== 'pending_approval' && loan.status !== 'pending_otp' && loan.status !== 'rejected' && loan.principalOutstandingPaise > 0) {
-                    await FinancialLedgerService.accrueInterest(loan);
-                    modified = true;
-                }
-
-                if (modified) await loan.save();
-            }
+            await FinancialLedgerService.reconcileLoan(loan);
 
             const lenderUser = await User.findOne({ id: loan.lender });
             const loanObj = loan.toObject ? loan.toObject() : loan;

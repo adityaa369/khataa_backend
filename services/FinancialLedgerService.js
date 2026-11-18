@@ -2,27 +2,50 @@ const Loan = require('../models/Loan');
 
 class FinancialLedgerService {
 
+    static computeExpectedInterestPaise(loan) {
+        const lType = String(loan.loanType || loan.type || '').toLowerCase();
+        if (!lType.includes('interest') && !lType.includes('home')) {
+            return 0;
+        }
+        const ratePct = Number(loan.interestRate || 0);
+        if (ratePct <= 0) return 0;
+
+        const baseAmountPaise = loan.amountPaise != null
+            ? Number(loan.amountPaise)
+            : Math.round(Number(loan.amount || 0) * 100);
+        if (baseAmountPaise <= 0) return 0;
+
+        const isDays = String(loan.durationType || '').toLowerCase() === 'days';
+        const rawDuration = Number(loan.durationMonths || 0);
+        let months = isDays ? (rawDuration / 30.0) : rawDuration;
+        // If start and end dates fall on exact calendar month boundaries (e.g. 18 Nov to 18 Jan = 61 days -> 2 months)
+        if (isDays && rawDuration >= 28 && (rawDuration % 30 <= 2 || rawDuration % 30 >= 28)) {
+            months = Math.max(1, Math.round(rawDuration / 30.0));
+        }
+        return Math.floor((baseAmountPaise * ratePct * months) / 100);
+    }
+
     static async accrueInterest(loan, effectiveAt = new Date()) {
-        if (!loan.principalOutstandingPaise) {
+        const baseAmountPaise = loan.amountPaise != null
+            ? Number(loan.amountPaise)
+            : Math.round(Number(loan.amount || 0) * 100);
+        if (!loan.principalOutstandingPaise && baseAmountPaise <= 0) {
             return; // No principal to accrue on
         }
 
-        const lType = (loan.loanType || loan.type || '').toLowerCase();
-        if (lType === 'hand_credit' || lType === 'business_credit') {
+        const lType = String(loan.loanType || loan.type || '').toLowerCase();
+        if (lType === 'hand_credit' || lType === 'business_credit' || lType === 'personal' || lType === 'business') {
             return; // Hand Credit and Business Credit are strictly 0% interest ledgers
         }
 
-        if (lType === 'interest_credit') {
+        if (lType.includes('interest') || lType.includes('home')) {
             // Upfront interest for initial loan duration
-            const hasUpfront = loan.transactions.some(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
+            if (!Array.isArray(loan.transactions)) {
+                loan.transactions = [];
+            }
+            const hasUpfront = loan.transactions.some(t => t.type === 'interest_accrued');
             if (!hasUpfront) {
-                let months = loan.durationMonths || 0;
-                if (loan.durationType === 'Days') {
-                    months = months / 30.0;
-                }
-                const ratePct = loan.interestRate || 0;
-                const amountPaise = loan.amountPaise || loan.principalOutstandingPaise;
-                const totalInterestPaise = Math.floor((amountPaise * ratePct * months) / 100);
+                const totalInterestPaise = this.computeExpectedInterestPaise(loan);
                 if (totalInterestPaise > 0) {
                     loan.transactions.push({
                         type: 'interest_accrued',
@@ -82,15 +105,35 @@ class FinancialLedgerService {
         let fees = 0;
         let paid = 0;
 
+        const txns = Array.isArray(loan.transactions) ? loan.transactions : [];
+        const hasLoanGiven = txns.some(t => t.type === 'loan_given');
+        const hasInterestAccrued = txns.some(t => t.type === 'interest_accrued');
+        const baseAmountPaise = loan.amountPaise != null
+            ? Number(loan.amountPaise)
+            : Math.round(Number(loan.amount || 0) * 100);
+
+        if (!hasLoanGiven && baseAmountPaise > 0) {
+            principal += baseAmountPaise;
+        }
+
+        if (!hasInterestAccrued) {
+            const expectedInterest = this.computeExpectedInterestPaise(loan);
+            if (expectedInterest > 0) {
+                interest += expectedInterest;
+            }
+        }
+
         // Replay all transactions
-        const sortedTxns = [...loan.transactions].sort((a, b) => {
-            const dateA = a.effectiveAt || a.recordedAt;
-            const dateB = b.effectiveAt || b.recordedAt;
+        const sortedTxns = [...txns].sort((a, b) => {
+            const dateA = new Date(a.effectiveAt || a.recordedAt || 0).getTime();
+            const dateB = new Date(b.effectiveAt || b.recordedAt || 0).getTime();
             return dateA - dateB;
         });
 
         for (const t of sortedTxns) {
-            const amt = t.amountPaise || 0;
+            const amt = t.amountPaise != null
+                ? Number(t.amountPaise)
+                : Math.round(Number(t.amount || 0) * 100);
             switch(t.type) {
                 case 'loan_given':
                 case 'credit_added':
@@ -102,9 +145,18 @@ class FinancialLedgerService {
                 case 'payment':
                 case 'interest_payment':
                     paid += amt;
-                    const fAlloc = t.feesAllocationPaise || 0;
-                    const iAlloc = t.interestAllocationPaise || 0;
-                    const pAlloc = t.principalAllocationPaise || 0;
+                    let fAlloc = Number(t.feesAllocationPaise || 0);
+                    let iAlloc = Number(t.interestAllocationPaise || 0);
+                    let pAlloc = Number(t.principalAllocationPaise || 0);
+                    if (fAlloc === 0 && iAlloc === 0 && pAlloc === 0 && amt > 0) {
+                        if (t.type === 'interest_payment') {
+                            iAlloc = Math.min(amt, interest);
+                            pAlloc = amt - iAlloc;
+                        } else {
+                            pAlloc = Math.min(amt, principal);
+                            iAlloc = amt - pAlloc;
+                        }
+                    }
                     fees -= fAlloc;
                     interest -= iAlloc;
                     principal -= pAlloc;
@@ -113,6 +165,7 @@ class FinancialLedgerService {
         }
 
         // Prevent negative balances
+        loan.amountPaise = baseAmountPaise;
         loan.principalOutstandingPaise = Math.max(0, principal);
         loan.interestOutstandingPaise = Math.max(0, interest);
         loan.feesOutstandingPaise = Math.max(0, fees);
@@ -133,6 +186,83 @@ class FinancialLedgerService {
         // Update legacy fields for compatibility
         loan.totalPayable = loan.totalPayablePaise / 100.0;
         loan.paidAmount = loan.paidAmountPaise / 100.0;
+    }
+
+    static async reconcileLoan(loan) {
+        let modified = false;
+        if (!Array.isArray(loan.transactions)) {
+            loan.transactions = [];
+            modified = true;
+        }
+
+        const baseAmountPaise = loan.amountPaise != null
+            ? Number(loan.amountPaise)
+            : Math.round(Number(loan.amount || 0) * 100);
+        if (loan.amountPaise !== baseAmountPaise && baseAmountPaise > 0) {
+            loan.amountPaise = baseAmountPaise;
+            modified = true;
+        }
+
+        // Deduplicate upfront interest if race condition caused multiple inserts
+        const upfrontTxns = loan.transactions.filter(t => t.type === 'interest_accrued' && t.note && t.note.includes('Upfront'));
+        if (upfrontTxns.length > 1) {
+            const firstUpfrontId = upfrontTxns[0]._id;
+            loan.transactions = loan.transactions.filter(t =>
+                !(t.type === 'interest_accrued' && t.note && t.note.includes('Upfront') && t._id.toString() !== firstUpfrontId.toString())
+            );
+            modified = true;
+        }
+
+        const isPendingOrRejected = ['pending_approval', 'pending_otp', 'rejected', 'cancelled', 'expired'].includes(loan.status);
+        if (!isPendingOrRejected) {
+            if (!loan.transactions.some(t => t.type === 'loan_given') && baseAmountPaise > 0) {
+                loan.transactions.push({
+                    type: 'loan_given',
+                    amountPaise: baseAmountPaise,
+                    note: 'Loan Activated',
+                    recordedAt: loan.activatedAt || loan.startDate || loan.createdAt || new Date(),
+                    effectiveAt: loan.activatedAt || loan.startDate || loan.createdAt || new Date(),
+                    recordedBy: loan.borrower || loan.lender
+                });
+                modified = true;
+            }
+
+            const lType = String(loan.loanType || loan.type || '').toLowerCase();
+            if ((lType.includes('interest') || lType.includes('home')) && Number(loan.interestRate || 0) > 0) {
+                const hasInterestTxn = loan.transactions.some(t => t.type === 'interest_accrued');
+                if (!hasInterestTxn) {
+                    await this.accrueInterest(loan);
+                    modified = true;
+                } else {
+                    // Check if existing upfront interest txn aligns with computeExpectedInterestPaise
+                    const expectedInterest = this.computeExpectedInterestPaise(loan);
+                    const upfrontTxn = loan.transactions.find(t => t.type === 'interest_accrued');
+                    if (upfrontTxn && (!upfrontTxn.amountPaise || upfrontTxn.amountPaise <= 0) && expectedInterest > 0) {
+                        upfrontTxn.amountPaise = expectedInterest;
+                        upfrontTxn.interestAllocationPaise = expectedInterest;
+                        modified = true;
+                    }
+                }
+            }
+        }
+
+        const prevPrincipal = loan.principalOutstandingPaise;
+        const prevInterest = loan.interestOutstandingPaise;
+        const prevTotal = loan.totalPayablePaise;
+        this.deriveBalances(loan);
+
+        if (
+            prevPrincipal !== loan.principalOutstandingPaise ||
+            prevInterest !== loan.interestOutstandingPaise ||
+            prevTotal !== loan.totalPayablePaise
+        ) {
+            modified = true;
+        }
+
+        if (modified && typeof loan.save === 'function') {
+            await loan.save();
+        }
+        return loan;
     }
 
     static async recordPayment(loan, amountPaise, intentId, recordedBy, effectiveAt = new Date(), paymentType = null) {

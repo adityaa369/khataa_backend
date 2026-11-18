@@ -35,7 +35,12 @@ exports.generateRepaymentTimeline = (loan) => {
             }
         }
         // Slice into 30-day boxes: e.g. 24 days -> 1 box (24d); 45 days -> 2 boxes (30d + 15d); 56 days -> 2 boxes (30d + 26d)
-        numInitialPeriods = Math.max(1, Math.ceil(totalDays / 30.0));
+        // Absorb 1-2 extra days from 31-day calendar months (e.g. 31d -> 1 box, 61/62d -> 2 boxes) so no 1-day stub box is created
+        if (totalDays >= 30 && (totalDays % 30 === 1 || totalDays % 30 === 2)) {
+            numInitialPeriods = Math.max(1, Math.round(totalDays / 30.0));
+        } else {
+            numInitialPeriods = Math.max(1, Math.ceil(totalDays / 30.0));
+        }
     } else {
         // Months mode — but check if endDate indicates a day-based duration (e.g., 45 days saved as 1 month)
         if (loan.endDate && Number(loan.durationMonths) === 1) {
