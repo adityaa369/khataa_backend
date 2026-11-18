@@ -907,12 +907,12 @@ exports.uploadDocument = async (req, res) => {
             });
         }
         
-        // Validate base64 size (max 5MB decoded)
+        // Validate base64 size (max 15MB decoded)
         const estimatedSize = (base64Data.length * 3) / 4;
-        if (estimatedSize > 5 * 1024 * 1024) {
+        if (estimatedSize > 15 * 1024 * 1024) {
             return res.status(400).json({
                 success: false,
-                message: 'File too large. Maximum size is 5MB.'
+                message: 'File too large. Maximum size is 15MB.'
             });
         }
 
