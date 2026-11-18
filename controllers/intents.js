@@ -15,12 +15,16 @@ exports.createIntent = async (req, res) => {
         
         // 2. Resource Authorization
         if (action === 'ACCEPT_LOAN') {
-            if (loan.borrower.toString() !== req.user.id) {
+            const isBorrowerById = loan.borrower && loan.borrower.toString() === req.user.id;
+            const isBorrowerByPhone =
+                String(loan.borrowerPhone || '').replace(/\D/g, '').slice(-10) ===
+                String(req.user.phone || '').replace(/\D/g, '').slice(-10);
+            if (!isBorrowerById && !isBorrowerByPhone) {
                 return res.status(403).json({ success: false, message: 'Only the borrower can accept this loan' });
             }
         } else {
             // Lender actions (PAYMENT, ADD_CREDIT, CLOSE_LOAN)
-            if (loan.lender.toString() !== req.user.id) {
+            if (!loan.lender || loan.lender.toString() !== req.user.id) {
                 return res.status(403).json({ success: false, message: 'Only the lender can perform this action' });
             }
         }

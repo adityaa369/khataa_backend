@@ -1,4 +1,5 @@
 const { parseRupeesToPaise, parseRupeesToPaiseOptional } = require('./money');
+const FinancialLedgerService = require('../services/FinancialLedgerService');
 
 function serializeTransaction(t) {
   const tObj = t.toObject ? t.toObject() : { ...t };
@@ -16,32 +17,57 @@ function loanSerializer(loanDoc) {
     ? l.amountPaise
     : parseRupeesToPaise(l.amount);
 
+  l.amountPaise = amountPaise;
+
+  if (Array.isArray(l.transactions) && l.transactions.length > 0) {
+    FinancialLedgerService.deriveBalances(l);
+  }
+
   const emiAmountPaise = (l.emiAmountPaise != null)
     ? l.emiAmountPaise
     : parseRupeesToPaiseOptional(l.emiAmount);
 
-  const totalPayablePaise = (l.totalPayablePaise != null)
-    ? l.totalPayablePaise
-    : parseRupeesToPaiseOptional(l.totalPayable);
-
   const paidAmountPaise = (l.paidAmountPaise != null)
     ? l.paidAmountPaise
-    : parseRupeesToPaiseOptional(l.paidAmount);
+    : (parseRupeesToPaiseOptional(l.paidAmount) || 0);
 
-  // principalOutstanding: use V2 ledger field if present; otherwise null if unknown.
-  // Never fabricate principal allocation from totalPayable - paidAmount.
-  const principalOutstandingPaise = (l.principalOutstandingPaise != null)
+  let principalOutstandingPaise = (l.principalOutstandingPaise != null)
     ? l.principalOutstandingPaise
     : null;
 
-  const interestOutstandingPaise = l.interestOutstandingPaise ?? null;
-  const feesOutstandingPaise = l.feesOutstandingPaise ?? null;
+  let interestOutstandingPaise = l.interestOutstandingPaise ?? 0;
+  const feesOutstandingPaise = l.feesOutstandingPaise ?? 0;
+
+  let totalPayablePaise = (l.totalPayablePaise != null)
+    ? l.totalPayablePaise
+    : parseRupeesToPaiseOptional(l.totalPayable);
+
+  // If the credit is pending approval/setup (or has no ledger transactions yet and is not settled),
+  // compute the initial principal, interest, and total payable so Review & Details screens show exact numbers.
+  const isFinished = ['completed', 'closed', 'rejected', 'cancelled', 'expired'].includes(l.status);
+  if ((!Array.isArray(l.transactions) || l.transactions.length === 0) && !isFinished) {
+    if (!principalOutstandingPaise || principalOutstandingPaise <= 0) {
+      principalOutstandingPaise = Math.max(0, amountPaise - paidAmountPaise);
+    }
+    const loanTypeStr = String(l.loanType || l.type || '').toLowerCase();
+    const ratePct = Number(l.interestRate || 0);
+    if ((loanTypeStr.includes('interest') || loanTypeStr.includes('home')) && ratePct > 0 && interestOutstandingPaise <= 0) {
+      const isDays = String(l.durationType || '').toLowerCase() === 'days';
+      const rawDuration = Number(l.durationMonths || 0);
+      const effectiveMonths = isDays ? (rawDuration / 30.0) : rawDuration;
+      interestOutstandingPaise = Math.floor((amountPaise * ratePct * effectiveMonths) / 100);
+    }
+    if (!totalPayablePaise || totalPayablePaise <= 0) {
+      totalPayablePaise = principalOutstandingPaise + interestOutstandingPaise + feesOutstandingPaise;
+    }
+  }
 
   return {
     ...l,
+    id: (l._id || l.id || '').toString(),
     amountPaise,
     emiAmountPaise,
-    totalPayablePaise,
+    totalPayablePaise: totalPayablePaise ?? ( (principalOutstandingPaise || 0) + interestOutstandingPaise + feesOutstandingPaise ),
     paidAmountPaise,
     principalOutstandingPaise,
     interestOutstandingPaise,

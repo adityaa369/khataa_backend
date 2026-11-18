@@ -137,7 +137,12 @@ class FinancialLedgerService {
 
     static async recordPayment(loan, amountPaise, intentId, recordedBy, effectiveAt = new Date(), paymentType = null) {
         if (!loan.transactions.some(t => t.type === 'loan_given')) {
-            throw new Error('Cannot process V2 payment: Loan requires legacy reconciliation/migration first.');
+            await this.activateLoan(
+                loan,
+                loan.amountPaise || Math.round((loan.amount || 0) * 100),
+                loan.lender,
+                loan.activatedAt || loan.startDate || loan.createdAt || effectiveAt
+            );
         }
         // Idempotency check
         if (intentId && loan.transactions.some(t => t.intentId === intentId)) {
@@ -195,7 +200,7 @@ class FinancialLedgerService {
         }
 
         loan.transactions.push({
-            type: 'payment',
+            type: paymentType === 'interest' ? 'interest_payment' : 'payment',
             amountPaise: amountPaise,
             feesAllocationPaise: fAlloc,
             interestAllocationPaise: iAlloc,
@@ -221,7 +226,12 @@ class FinancialLedgerService {
 
     static async addCredit(loan, amountPaise, intentId, recordedBy, effectiveAt = new Date()) {
         if (!loan.transactions.some(t => t.type === 'loan_given')) {
-            throw new Error('Cannot process V2 credit: Loan requires legacy reconciliation/migration first.');
+            await this.activateLoan(
+                loan,
+                loan.amountPaise || Math.round((loan.amount || 0) * 100),
+                loan.lender,
+                loan.activatedAt || loan.startDate || loan.createdAt || effectiveAt
+            );
         }
         // Idempotency check
         if (intentId && loan.transactions.some(t => t.intentId === intentId)) {
@@ -267,7 +277,12 @@ class FinancialLedgerService {
 
     static async closeLoan(loan, effectiveAt = new Date(), recordedBy = null, intentId = null) {
         if (!loan.transactions.some(t => t.type === 'loan_given')) {
-            throw new Error('Cannot close loan: Requires legacy reconciliation/migration first.');
+            await this.activateLoan(
+                loan,
+                loan.amountPaise || Math.round((loan.amount || 0) * 100),
+                loan.lender,
+                loan.activatedAt || loan.startDate || loan.createdAt || effectiveAt
+            );
         }
 
         // Accrue final interest

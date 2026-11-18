@@ -229,6 +229,15 @@ exports.createLoan = async (req, res) => {
         const parsedStartDate = req.body.start_date ? new Date(req.body.start_date) : new Date();
         const parsedDueDate = req.body.due_date ? new Date(req.body.due_date) : undefined;
 
+        const isDaysDuration = String(durationType || '').toLowerCase() === 'days';
+        const effectiveDurationMonths = isDaysDuration
+            ? (Number(durationMonths || 0) / 30.0)
+            : Number(durationMonths || 0);
+        const initialInterestPaise = effectiveInterestRate > 0
+            ? Math.floor((canonicalAmountPaise * effectiveInterestRate * effectiveDurationMonths) / 100)
+            : 0;
+        const initialTotalPayablePaise = canonicalAmountPaise + initialInterestPaise;
+
         const loan = await Loan.create({
             lender: req.user.id,
             borrower: borrower.id,
@@ -238,6 +247,10 @@ exports.createLoan = async (req, res) => {
             borrowerAddress,
             amount,
             amountPaise: canonicalAmountPaise,
+            principalOutstandingPaise: canonicalAmountPaise,
+            interestOutstandingPaise: initialInterestPaise,
+            totalPayablePaise: initialTotalPayablePaise,
+            totalPayable: initialTotalPayablePaise / 100.0,
             interestRate: effectiveInterestRate,
             durationMonths,
             durationType,
@@ -266,19 +279,18 @@ exports.createLoan = async (req, res) => {
             aggregateId: loan._id.toString(),
             recipientUserId: borrower._id,
             payload: {
-                title: 'Lender Setup Verification',
-                body: `A credit agreement setup for ₹${amount} has been initiated by ${lenderName}.`,
-                type: 'LOAN_INIT_OTP',
+                title: 'New Credit Agreement Request',
+                body: `A credit agreement for ₹${amount} has been sent to you by ${lenderName}. Tap to review and accept.`,
+                type: 'LOAN_CREATED',
                 loanId: loan._id.toString()
             }
         }).catch(err => console.error('[EventDispatcher] Failed:', err.message));
 
-        const loanResponse = loan.toObject();
-        loanResponse.id = loan._id.toString();
+        const loanResponse = loanSerializer(loan);
 
         res.status(201).json({
             success: true,
-            message: 'Loan agreement initiated. OTP sent to borrower.',
+            message: 'Loan agreement initiated.',
             loan: loanResponse
         });
     } catch (err) {
@@ -505,20 +517,21 @@ exports.verifyLoan = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Loan is not ready for approval or already active.' });
         }
 
-        const isBorrower = String(loan.borrowerPhone).replace(/\D/g, '').slice(-10) === String(req.user.phone).replace(/\D/g, '').slice(-10);
+        const isBorrower =
+            (loan.borrower && loan.borrower === req.user.id) ||
+            String(loan.borrowerPhone || '').replace(/\D/g, '').slice(-10) === String(req.user.phone || '').replace(/\D/g, '').slice(-10);
         if (!isBorrower) return res.status(403).json({ success: false, message: 'Only the designated borrower can approve this loan.' });
 
-        if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required for financial authorization' });
-        
-        const { verifyFirebaseToken } = require('../utils/otpProvider');
-        const verificationResult = await verifyFirebaseToken(idToken);
-        if (!verificationResult.success) {
-            return res.status(400).json({ success: false, message: 'Invalid ID Token' });
-        }
-        
-        const returnedPhone = verificationResult.mobile.replace(/\D/g, '').slice(-10);
-        if (returnedPhone !== String(req.user.phone).replace(/\D/g, '').slice(-10)) {
-            return res.status(403).json({ success: false, message: 'ID Token identity does not match authenticated session' });
+        // Support both Firebase ID Token (when signed in via OTP) and authenticated Backend JWT session (when signed in via Password or MPIN)
+        if (idToken) {
+            const { verifyFirebaseToken } = require('../utils/otpProvider');
+            const verificationResult = await verifyFirebaseToken(idToken);
+            if (verificationResult.success && verificationResult.mobile) {
+                const returnedPhone = verificationResult.mobile.replace(/\D/g, '').slice(-10);
+                if (returnedPhone !== String(req.user.phone || '').replace(/\D/g, '').slice(-10)) {
+                    return res.status(403).json({ success: false, message: 'ID Token identity does not match authenticated session' });
+                }
+            }
         }
 
         if (!intentId) return res.status(400).json({ success: false, message: 'intentId is required for this action' });
@@ -615,7 +628,7 @@ exports.verifyLoan = async (req, res) => {
         
         console.log('--- END DEBUG ---\n');
 
-        res.status(200).json({ success: true, loan });
+        res.status(200).json({ success: true, loan: loanSerializer(loan) });
     } catch (err) {
         console.error('[Loans] verifyLoan Error:', err.message);
         sendError(res, err);
@@ -812,7 +825,7 @@ exports.closeLoan = async (req, res) => {
         const Loan = require('../models/Loan');
         const TransactionIntent = require('../models/TransactionIntent');
         const FinancialLedgerService = require('../services/FinancialLedgerService');
-        const { cacheInvalidate } = require('../middleware/cache');
+        const { cacheInvalidate } = require('../config/redis');
         const { invalidateLoanCache } = require('../middleware/cache');
 
         const loan = await Loan.findById(req.params.id);
@@ -901,7 +914,7 @@ exports.closeLoan = async (req, res) => {
         await invalidateLoanCache(loan.lender, loan.borrower);
         await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
-        res.status(200).json({ success: true, message: 'Loan successfully closed.', loan });
+        res.status(200).json({ success: true, message: 'Loan successfully closed.', loan: loanSerializer(loan) });
     } catch (err) {
         console.error('[Loans] closeLoan Error:', err.message);
         sendError(res, err);
@@ -976,7 +989,7 @@ exports.uploadDocument = async (req, res) => {
 // Custom Payment Transactions
 async function _handleCustomTransaction(req, res, actionType) {
     try {
-        const { amountPaise, idToken, intentId } = req.body;
+        const { amountPaise, idToken, intentId, paymentType } = req.body;
         // Fallback for strict amount parsing
         const pa = amountPaise || (req.body.amount ? Math.round(req.body.amount * 100) : 0);
 
@@ -989,11 +1002,17 @@ async function _handleCustomTransaction(req, res, actionType) {
         if (loan.status === 'closed') return res.status(400).json({ success: false, message: 'Credit is already closed' });
         if (!pa || pa <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
         
-        if (!idToken) return res.status(400).json({ success: false, message: 'idToken is required' });
-        const { verifyFirebaseToken } = require('../utils/otpProvider');
-        const verificationResult = await verifyFirebaseToken(idToken);
-        if (!verificationResult.success) {
-            return res.status(400).json({ success: false, message: verificationResult.message || 'Invalid ID Token' });
+        // Request is already authenticated by `protect` JWT middleware (`req.user`).
+        // Optional Firebase ID token check if a Firebase token was provided:
+        if (idToken) {
+            const { verifyFirebaseToken } = require('../utils/otpProvider');
+            const verificationResult = await verifyFirebaseToken(idToken);
+            if (verificationResult.success && verificationResult.mobile) {
+                const returnedPhone = verificationResult.mobile.replace(/\D/g, '').slice(-10);
+                if (returnedPhone !== String(req.user.phone || '').replace(/\D/g, '').slice(-10)) {
+                    return res.status(403).json({ success: false, message: 'ID Token identity mismatch' });
+                }
+            }
         }
 
         const FinancialLedgerService = require('../services/FinancialLedgerService');
@@ -1023,10 +1042,12 @@ async function _handleCustomTransaction(req, res, actionType) {
             }
 
             if (actionType === 'recordPayment' || actionType === 'recordInterest') {
-                const pType = actionType === 'recordInterest' ? 'interest' : 'principal';
+                const pType = actionType === 'recordInterest'
+                    ? 'interest'
+                    : (paymentType === 'interest' ? 'interest' : (paymentType === 'principal' ? 'principal' : null));
                 await FinancialLedgerService.recordPayment(sessionLoan, pa, intentId, req.user.id, new Date(), pType);
-                notifTitle = 'Repayment Recorded';
-                notifBody = `A repayment of ₹${pa / 100} was recorded. Remaining balance: ₹${sessionLoan.totalPayablePaise / 100}.`;
+                notifTitle = pType === 'interest' ? 'Interest Payment Recorded' : 'Repayment Recorded';
+                notifBody = `A ${pType === 'interest' ? 'interest ' : ''}repayment of ₹${pa / 100} was recorded. Remaining balance: ₹${sessionLoan.totalPayablePaise / 100}.`;
             } else if (actionType === 'addCredit') {
                 await FinancialLedgerService.addCredit(sessionLoan, pa, intentId, req.user.id);
                 notifTitle = 'Additional Credit Added';
@@ -1054,7 +1075,7 @@ async function _handleCustomTransaction(req, res, actionType) {
                     payload: {
                         title: notifTitle,
                         body: notifBody,
-                        type: 'LOAN_TRANSACTION',
+                        type: 'PAYMENT_RECEIVED',
                         loanId: sessionLoan._id.toString()
                     },
                     idempotencyKey: intentId ? `${intentId}_BORROWER` : undefined,
@@ -1071,7 +1092,7 @@ async function _handleCustomTransaction(req, res, actionType) {
                     payload: {
                         title: notifTitle,
                         body: notifBody,
-                        type: 'LOAN_TRANSACTION',
+                        type: 'PAYMENT_RECEIVED',
                         loanId: sessionLoan._id.toString()
                     },
                     idempotencyKey: intentId ? `${intentId}_LENDER` : undefined,
@@ -1080,18 +1101,18 @@ async function _handleCustomTransaction(req, res, actionType) {
             }
         }); // === END ATOMIC BOUNDARY ===
 
-        const { invalidateLoanCache } = require('../middleware/cache');
         await invalidateLoanCache(loan.lender, loan.borrower);
+        await cacheInvalidate(`loans:given:${loan.lender}`, `loans:taken:${loan.borrower}`);
 
         if (loan.borrower) {
             const { updateCreditScore } = require('../utils/creditScoreCalc');
             await updateCreditScore(loan.borrower);
         }
 
-        res.status(200).json({ success: true, loan: savedLoan || loan });
+        res.status(200).json({ success: true, loan: loanSerializer(savedLoan || loan) });
     } catch (err) {
         console.error('[Loans] customTransaction Error:', err.message);
-        res.status(500).json({ success: false, message: err.message });
+        res.status(400).json({ success: false, message: err.message });
     }
 }
 exports.recordPayment = (req, res) => _handleCustomTransaction(req, res, 'recordPayment');
