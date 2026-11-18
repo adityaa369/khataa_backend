@@ -227,12 +227,25 @@ exports.createLoan = async (req, res) => {
 
         const effectiveInterestRate = loanType === 'interest_credit' ? Number(interestRate || 0) : 0;
         const parsedStartDate = req.body.start_date ? new Date(req.body.start_date) : new Date();
-        const parsedDueDate = req.body.due_date ? new Date(req.body.due_date) : undefined;
+        const validStartDate = !isNaN(parsedStartDate.getTime()) ? parsedStartDate : new Date();
+        let parsedDueDate = req.body.due_date ? new Date(req.body.due_date) : undefined;
+        if (!parsedDueDate || isNaN(parsedDueDate.getTime())) {
+            parsedDueDate = new Date(validStartDate);
+            if (String(durationType || '').toLowerCase() === 'days') {
+                parsedDueDate.setDate(parsedDueDate.getDate() + Number(durationMonths || 30));
+            } else {
+                parsedDueDate.setMonth(parsedDueDate.getMonth() + Number(durationMonths || 1));
+            }
+        }
 
         const isDaysDuration = String(durationType || '').toLowerCase() === 'days';
-        const effectiveDurationMonths = isDaysDuration
-            ? (Number(durationMonths || 0) / 30.0)
-            : Number(durationMonths || 0);
+        const rawDurVal = Number(durationMonths || 0);
+        let effectiveDurationMonths = isDaysDuration
+            ? (rawDurVal / 30.0)
+            : rawDurVal;
+        if (isDaysDuration && rawDurVal >= 28 && (rawDurVal % 30 <= 2 || rawDurVal % 30 >= 28)) {
+            effectiveDurationMonths = Math.max(1, Math.round(rawDurVal / 30.0));
+        }
         const initialInterestPaise = effectiveInterestRate > 0
             ? Math.floor((canonicalAmountPaise * effectiveInterestRate * effectiveDurationMonths) / 100)
             : 0;
@@ -254,8 +267,8 @@ exports.createLoan = async (req, res) => {
             interestRate: effectiveInterestRate,
             durationMonths,
             durationType,
-            startDate: !isNaN(parsedStartDate.getTime()) ? parsedStartDate : new Date(),
-            endDate: parsedDueDate && !isNaN(parsedDueDate.getTime()) ? parsedDueDate : undefined,
+            startDate: validStartDate,
+            endDate: parsedDueDate,
             loanType,
             status: 'pending_approval',
             transaction_id: effectiveTransactionId,
@@ -308,7 +321,9 @@ exports.getGivenLoans = async (req, res) => {
         const cached = await cacheGet(cacheKey);
         if (cached) return res.status(200).json(cached);
 
-        const loans = await Loan.find({ lender: req.user.id, status: { $ne: 'pending_otp' } });
+        const lenderIds = [req.user.id];
+        if (req.user._id) lenderIds.push(req.user._id.toString());
+        const loans = await Loan.find({ lender: { $in: lenderIds }, status: { $ne: 'pending_otp' } });
         const loansMapped = [];
         const User = require('../models/User'); // Import User model
         const FinancialLedgerService = require('../services/FinancialLedgerService');
@@ -349,32 +364,38 @@ exports.getGivenLoans = async (req, res) => {
 // @access  Private
 exports.getLoanById = async (req, res) => {
     try {
-        const loan = await Loan.findById(req.params.id)
-            .populate({ path: 'lender', model: 'User', localField: 'lender', foreignField: 'id', select: 'id firstName lastName phone' })
-            .populate({ path: 'borrower', model: 'User', localField: 'borrower', foreignField: 'id', select: 'id firstName lastName phone' });
+        const loan = await Loan.findById(req.params.id);
         if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
-        
-        const isLender = loan.lender && (loan.lender.id === req.user.id || loan.lender === req.user.id);
-        const isBorrower = (loan.borrower && (loan.borrower.id === req.user.id || loan.borrower === req.user.id)) || 
-                           (loan.borrowerPhone === req.user.phone.toString().replace(/^\+?91/, ''));
-                           
-        if (!isLender && !isBorrower) {
-            return res.status(403).json({ success: false, message: 'Not authorized to view this loan' });
-        }
 
         const FinancialLedgerService = require('../services/FinancialLedgerService');
         await FinancialLedgerService.reconcileLoan(loan);
 
-        const loanObj = loan.toObject ? loan.toObject() : { ...loan };
-        if (loanObj.lender && typeof loanObj.lender === 'object') {
-            loanObj.lenderName = `${loanObj.lender.firstName || ''} ${loanObj.lender.lastName || ''}`.trim() || 'Lender';
-            loanObj.lenderPhone = loanObj.lender.phone || '';
+        const userObjIdStr = req.user._id ? req.user._id.toString() : '';
+        const isLender = loan.lender && (loan.lender === req.user.id || loan.lender === userObjIdStr);
+        const isBorrower =
+            (loan.borrower && (loan.borrower === req.user.id || loan.borrower === userObjIdStr)) ||
+            (String(loan.borrowerPhone || '').replace(/\D/g, '').slice(-10) ===
+                String(req.user.phone || '').replace(/\D/g, '').slice(-10));
+
+        if (!isLender && !isBorrower) {
+            return res.status(403).json({ success: false, message: 'Not authorized to view this loan' });
         }
-        if (loanObj.borrower && typeof loanObj.borrower === 'object') {
-            const bName = `${loanObj.borrower.firstName || ''} ${loanObj.borrower.lastName || ''}`.trim();
+
+        const [lenderUser, borrowerUser] = await Promise.all([
+            loan.lender ? User.findOne({ id: loan.lender }).select('id firstName lastName phone').lean() : null,
+            loan.borrower ? User.findOne({ id: loan.borrower }).select('id firstName lastName phone').lean() : null
+        ]);
+
+        const loanObj = loan.toObject ? loan.toObject() : { ...loan };
+        if (lenderUser) {
+            loanObj.lenderName = `${lenderUser.firstName || ''} ${lenderUser.lastName || ''}`.trim() || 'Lender';
+            loanObj.lenderPhone = lenderUser.phone || '';
+        }
+        if (borrowerUser) {
+            const bName = `${borrowerUser.firstName || ''} ${borrowerUser.lastName || ''}`.trim();
             if (bName) loanObj.borrowerName = bName;
-            if (!loanObj.borrowerPhone && loanObj.borrower.phone) {
-                loanObj.borrowerPhone = loanObj.borrower.phone;
+            if (!loanObj.borrowerPhone && borrowerUser.phone) {
+                loanObj.borrowerPhone = borrowerUser.phone;
             }
         }
 
@@ -393,12 +414,14 @@ exports.getTakenLoans = async (req, res) => {
 
         // Sanitize phone for query consistency
         const phone = req.user.phone.toString().replace(/^\+?91/, '');
+        const borrowerIds = [req.user.id];
+        if (req.user._id) borrowerIds.push(req.user._id.toString());
         const loans = await Loan.find({
             $or: [
                 { borrowerPhone: phone },
-                { borrower: req.user.id }
+                { borrower: { $in: borrowerIds } }
             ],
-            lender: { $ne: req.user.id }, // Explicitly exclude loans where I am the lender
+            lender: { $nin: borrowerIds }, // Explicitly exclude loans where I am the lender
             status: { $ne: 'pending_otp' }
         });
 

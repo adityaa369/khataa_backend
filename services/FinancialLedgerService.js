@@ -190,6 +190,44 @@ class FinancialLedgerService {
 
     static async reconcileLoan(loan) {
         let modified = false;
+        const mongoose = require('mongoose');
+        const User = require('../models/User');
+
+        // Self-heal lender/borrower if Mongoose .populate() + .save() ever overwrote User.id with User._id
+        if (loan.lender && typeof loan.lender === 'string' && mongoose.Types.ObjectId.isValid(loan.lender) && loan.lender.length === 24) {
+            const uById = await User.findOne({ id: loan.lender }).select('id').lean();
+            if (!uById) {
+                const uByObjId = await User.findById(loan.lender).select('id').lean();
+                if (uByObjId && uByObjId.id) {
+                    loan.lender = uByObjId.id;
+                    modified = true;
+                }
+            }
+        }
+        if (loan.borrower && typeof loan.borrower === 'string' && mongoose.Types.ObjectId.isValid(loan.borrower) && loan.borrower.length === 24) {
+            const bById = await User.findOne({ id: loan.borrower }).select('id').lean();
+            if (!bById) {
+                const bByObjId = await User.findById(loan.borrower).select('id').lean();
+                if (bByObjId && bByObjId.id) {
+                    loan.borrower = bByObjId.id;
+                    modified = true;
+                }
+            }
+        }
+
+        // Self-heal missing endDate
+        if (!loan.endDate && (loan.startDate || loan.createdAt) && loan.durationMonths) {
+            const start = new Date(loan.startDate || loan.createdAt);
+            const end = new Date(start);
+            if (String(loan.durationType || '').toLowerCase() === 'days') {
+                end.setDate(end.getDate() + Number(loan.durationMonths || 30));
+            } else {
+                end.setMonth(end.getMonth() + Number(loan.durationMonths || 1));
+            }
+            loan.endDate = end;
+            modified = true;
+        }
+
         if (!Array.isArray(loan.transactions)) {
             loan.transactions = [];
             modified = true;
@@ -284,20 +322,10 @@ class FinancialLedgerService {
 
         const loanTypeStr = (loan.loanType || loan.type || '').toLowerCase();
         const isInterestLoan = loanTypeStr.includes('interest') || loanTypeStr.includes('home');
+        const totalOutstanding = (loan.principalOutstandingPaise || 0) + (loan.interestOutstandingPaise || 0) + (loan.feesOutstandingPaise || 0);
 
-        if (isInterestLoan && paymentType === 'interest') {
-            if (amountPaise > (loan.interestOutstandingPaise || 0)) {
-                throw new Error(`Overpayment rejected. Amount: ${amountPaise}, Interest Outstanding: ${loan.interestOutstandingPaise || 0}`);
-            }
-        } else if (isInterestLoan && paymentType === 'principal') {
-            if (amountPaise > (loan.principalOutstandingPaise || 0)) {
-                throw new Error(`Overpayment rejected. Amount: ${amountPaise}, Principal Outstanding: ${loan.principalOutstandingPaise || 0}`);
-            }
-        } else {
-            const totalOutstanding = (loan.principalOutstandingPaise || 0) + (loan.interestOutstandingPaise || 0) + (loan.feesOutstandingPaise || 0);
-            if (amountPaise > totalOutstanding) {
-                throw new Error(`Overpayment rejected. Amount: ${amountPaise}, Outstanding: ${totalOutstanding}`);
-            }
+        if (amountPaise > totalOutstanding) {
+            throw new Error(`Overpayment rejected. Amount: ₹${(amountPaise / 100).toFixed(2)} exceeds remaining balance of ₹${(totalOutstanding / 100).toFixed(2)}`);
         }
 
         let fAlloc = 0;
@@ -305,12 +333,16 @@ class FinancialLedgerService {
         let pAlloc = 0;
 
         if (isInterestLoan && paymentType === 'interest') {
+            // Allocate to interest first; if payment exceeds interest, apply remainder to principal
             iAlloc = Math.min(amountPaise, loan.interestOutstandingPaise || 0);
-            pAlloc = 0;
+            const remAfterInterest = amountPaise - iAlloc;
+            pAlloc = Math.min(remAfterInterest, loan.principalOutstandingPaise || 0);
             fAlloc = 0;
         } else if (isInterestLoan && paymentType === 'principal') {
+            // Allocate to principal first; if payment exceeds principal (e.g. full settlement), apply remainder to interest
             pAlloc = Math.min(amountPaise, loan.principalOutstandingPaise || 0);
-            iAlloc = 0;
+            const remAfterPrincipal = amountPaise - pAlloc;
+            iAlloc = Math.min(remAfterPrincipal, loan.interestOutstandingPaise || 0);
             fAlloc = 0;
         } else {
             // Waterfall allocation for general payments or non-interest loans (hand/business)
